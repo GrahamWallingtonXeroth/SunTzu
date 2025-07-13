@@ -13,20 +13,27 @@ def test_new_game(client):
     """Test POST /api/game/new creates a game with a valid game_id."""
     response = client.post('/api/game/new', json={'seed': 42})
     assert response.status_code == 200
-    assert response.json == {'game_id': '1'}
+    data = response.json
+    assert 'game_id' in data
+    # Verify it's a valid UUID format (8-4-4-4-12 characters)
+    import re
+    uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    assert re.match(uuid_pattern, data['game_id']) is not None
 
 def test_get_game_state(client):
     """Test GET /api/game/<game_id>/state returns valid game state."""
     # First, create a game
-    client.post('/api/game/new', json={'seed': 42})
+    create_response = client.post('/api/game/new', json={'seed': 42})
+    assert create_response.status_code == 200
+    game_id = create_response.json['game_id']
     
     # Then, get the game state
-    response = client.get('/api/game/1/state')
+    response = client.get(f'/api/game/{game_id}/state')
     assert response.status_code == 200
     data = response.json
     
     # Verify key structure
-    assert data['game_id'] == '1'
+    assert data['game_id'] == game_id
     assert data['turn'] == 1
     assert data['phase'] == 'plan'
     assert len(data['players']) == 2
