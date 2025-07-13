@@ -52,6 +52,7 @@ def get_game_state(game_id: str):
             'game_id': game_id,
             'turn': game_state.turn,
             'phase': game_state.phase,
+            'orders_submitted': game_state.orders_submitted.copy(),
             'players': [
                 {
                     'id': player.id,
@@ -81,8 +82,28 @@ def get_game_state(game_id: str):
         return jsonify({'error': f'Failed to retrieve game state: {str(e)}'}), 500
 
 @app.route('/api/game/<game_id>/action', methods=['POST'])
-def submit_action(game_id: str):
-    """Submit orders for the current player and process the action phase."""
+def submit_action(game_id: str) -> Any:
+    """
+    Submit orders for the current player and process the action phase.
+    
+    Based on GDD page 9 (API) and page 5 (turn cycle):
+    - Validates that game is in 'plan' phase before processing orders
+    - Validates that the player hasn't submitted orders yet
+    - Processes orders via resolve_orders() which updates force positions and stances
+    - Sets phase to 'execute' only when both players have submitted orders
+    - Logs order submission and phase transition in game state log
+    
+    Args:
+        game_id: Unique identifier for the game
+        
+    Returns:
+        JSON response with updated game state and order processing results
+        
+    Raises:
+        404: Game not found
+        400: Invalid request data, wrong phase, or player already submitted orders
+        500: Internal server error
+    """
     try:
         # Validate game_id exists
         if game_id not in games:
@@ -90,10 +111,27 @@ def submit_action(game_id: str):
         
         game_state = games[game_id]
         
+        # Validate phase is 'plan' before processing orders (GDD page 5)
+        if game_state.phase != 'plan':
+            raise ValueError(f"Orders can only be submitted during 'plan' phase, current phase: {game_state.phase}")
+        
         # Validate request body
         data = request.get_json()
         if data is None:
             return jsonify({'error': 'Invalid JSON data'}), 400
+        
+        # Extract player_id from request
+        player_id = data.get('player_id')
+        if not player_id:
+            return jsonify({'error': 'player_id is required'}), 400
+        
+        # Validate player_id exists
+        if not game_state.get_player_by_id(player_id):
+            return jsonify({'error': f'Player {player_id} not found'}), 400
+        
+        # Validate that the player hasn't submitted orders yet
+        if game_state.orders_submitted.get(player_id, False):
+            return jsonify({'error': f'Player {player_id} has already submitted orders for this turn'}), 400
         
         orders_data = data.get('orders', [])
         if not isinstance(orders_data, list):
@@ -191,9 +229,34 @@ def submit_action(game_id: str):
             except Exception as e:
                 results['errors'].append(f'Failed to resolve confrontation: {str(e)}')
         
-        # Advance game phase to 'execute' if we're in 'plan' phase
-        if game_state.phase == 'plan':
-            game_state.advance_phase()
+        # Mark that this player has submitted orders
+        game_state.orders_submitted[player_id] = True
+        
+        # Check if both players have submitted orders
+        both_players_submitted = all(
+            game_state.orders_submitted.get(player.id, False) 
+            for player in game_state.players
+        )
+        
+        # Set phase to 'execute' only if both players have submitted orders
+        if both_players_submitted:
+            game_state.phase = 'execute'
+            # Reset orders_submitted for next turn
+            game_state.orders_submitted = {}
+            
+            # Log the phase transition (GDD page 9)
+            game_state.log.append({
+                'turn': game_state.turn,
+                'phase': game_state.phase,
+                'event': f'Orders processed for player {player_id}, phase set to execute'
+            })
+        else:
+            # Log that we're waiting for the other player
+            game_state.log.append({
+                'turn': game_state.turn,
+                'phase': game_state.phase,
+                'event': f'Orders processed for player {player_id}, waiting for other player'
+            })
         
         # Prepare response
         response_data = {
@@ -203,7 +266,8 @@ def submit_action(game_id: str):
             'orders_processed': len(orders),
             'revealed_orders': results.get('revealed_orders', []),
             'confrontations': confrontation_results,
-            'errors': results.get('errors', [])
+            'errors': results.get('errors', []),
+            'orders_submitted': game_state.orders_submitted.copy()
         }
         
         # Include updated game state
@@ -211,6 +275,7 @@ def submit_action(game_id: str):
             'game_id': game_id,
             'turn': game_state.turn,
             'phase': game_state.phase,
+            'orders_submitted': game_state.orders_submitted.copy(),
             'players': [
                 {
                     'id': player.id,
@@ -237,6 +302,9 @@ def submit_action(game_id: str):
         
         return jsonify(response_data)
     
+    except ValueError as e:
+        # Handle phase validation errors
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': f'Failed to process action: {str(e)}'}), 500
 
@@ -282,6 +350,7 @@ def perform_upkeep_phase(game_id: str):
             'game_id': game_id,
             'turn': game_state.turn,
             'phase': game_state.phase,
+            'orders_submitted': game_state.orders_submitted.copy(),
             'players': [
                 {
                     'id': player.id,

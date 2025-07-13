@@ -232,7 +232,7 @@ def perform_upkeep(game_state: GameState) -> Dict:
     """
     Perform upkeep phase operations for turn finalization.
     
-    Based on GDD: Apply queued Shih, yield Shih from controlled Contentious terrain,
+    Based on GDD pages 3-7: Apply queued Shih actions, yield Shih from controlled Contentious terrain,
     check victory conditions, advance turn and reset phase to 'plan'.
     
     Args:
@@ -240,7 +240,14 @@ def perform_upkeep(game_state: GameState) -> Dict:
     
     Returns:
         Dictionary with results: {'winner': str or None, 'shih_yields': dict, 'encirclements': list}
+    
+    Raises:
+        ValueError: If game state phase is not 'execute' when upkeep is called
     """
+    # Validate that we're in the correct phase for upkeep
+    if game_state.phase != 'execute':
+        raise ValueError(f"Upkeep can only be performed during 'execute' phase, current phase is '{game_state.phase}'")
+    
     results = {
         'winner': None,
         'shih_yields': {},
@@ -292,13 +299,20 @@ def perform_upkeep(game_state: GameState) -> Dict:
     if winner:
         log_event(game_state, f"Game Over: {winner} is victorious!", winner_id=winner, game_end_turn=game_state.turn)
     else:
-        # Advance turn and reset phase to 'plan' (unless game is over)
+        # Log turn completion before incrementing
         old_turn = game_state.turn
-        old_phase = game_state.phase
-        game_state.advance_phase()
+        game_state.log.append({
+            'turn': game_state.turn,
+            'phase': game_state.phase,
+            'event': f'Turn {game_state.turn} completed, advancing to plan phase of turn {game_state.turn + 1}'
+        })
+        
+        # Set phase to 'plan' and increment turn (unless game is over)
+        game_state.phase = 'plan'
+        game_state.turn += 1
         
         log_event(game_state, f"Turn {old_turn} completed, advancing to {game_state.phase} phase of turn {game_state.turn}", 
-                 previous_turn=old_turn, previous_phase=old_phase, new_turn=game_state.turn, new_phase=game_state.phase)
+                 previous_turn=old_turn, previous_phase='execute', new_turn=game_state.turn, new_phase=game_state.phase)
     
     return results
 

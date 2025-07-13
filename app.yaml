@@ -1,0 +1,63 @@
+# Google Cloud Platform App Engine Configuration
+# This file configures deployment settings for the SunTzu Flask application
+
+# Runtime configuration - specifies Python 3.12 for the App Engine standard environment
+runtime: python312
+
+# Entry point - the command to start your Flask application
+# This runs the app.py file which should contain your Flask app instance
+entrypoint: python app.py
+
+# Automatic scaling configuration
+# This allows App Engine to automatically scale instances based on traffic
+automatic_scaling:
+  # Maximum number of instances to run (keeps costs low for free tier)
+  max_num_instances: 2
+  
+  # Target CPU utilization percentage
+  # App Engine will scale up when CPU usage exceeds 80%
+  target_cpu_utilization: 0.8
+  
+  # Minimum number of instances to keep running
+  # Set to 0 to allow scaling down to zero when no traffic (cost optimization)
+  min_num_instances: 0
+  
+  # Maximum number of concurrent requests per instance
+  # Helps control resource usage and costs
+  max_concurrent_requests: 10
+  
+  # Target throughput utilization (requests per second per instance)
+  # App Engine will scale when this threshold is exceeded
+  target_throughput_utilization: 0.6
+
+# Instance class configuration
+# F1 is the smallest instance class, suitable for free tier and cost optimization
+instance_class: F1
+
+# Handlers configuration
+# Defines how different URL patterns are handled
+handlers:
+  # Serve static files (if any) from the static directory
+  - url: /static
+    static_dir: static
+    
+  # Serve all other requests through the main application
+  - url: /.*
+    script: auto
+    secure: always
+
+# Basic settings
+# Enable HTTPS by default for security
+secure: always
+
+# Environment variables (none configured as requested)
+# You can add environment variables here if needed later:
+# env_variables:
+#   DATABASE_URL: "your-database-url"
+#   API_KEY: "your-api-key"
+
+# Notes for deployment:
+# 1. Make sure your app.py file contains: app.run(host='0.0.0.0', port=8080)
+# 2. Ensure all dependencies are listed in requirements.txt
+# 3. The free tier includes 28 instance hours per day
+# 4. This configuration is optimized for cost efficiency while maintaining performance

@@ -1,5 +1,8 @@
 import pytest
 from flask import Flask
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import app  # Import the Flask app
 import json
 
@@ -81,7 +84,7 @@ def test_valid_advance_order(client, sample_game_state):
         'stance': 'Mountain'
     }]
     
-    response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
     assert response.status_code == 200
     data = response.json
     
@@ -95,11 +98,15 @@ def test_valid_advance_order(client, sample_game_state):
     assert 'errors' in data
     assert 'state' in data
     
-    # Verify phase advancement from 'plan' to 'execute'
-    assert data['phase'] == 'execute'
+    # Verify phase is still 'plan' since only one player has submitted orders
+    assert data['phase'] == 'plan'
     assert data['orders_processed'] == 1
     assert len(data['confrontations']) == 0
     assert len(data['errors']) == 0
+    
+    # Verify orders_submitted shows p1 has submitted
+    assert data['orders_submitted']['p1'] is True
+    assert data['orders_submitted'].get('p2', False) is False
     
     # Verify Shih deduction (10 - 2 = 8)
     updated_state = data['state']
@@ -138,12 +145,12 @@ def test_advance_with_confrontation(client, sample_game_state):
             'stance': 'River'
         }
     ]
-    response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
     assert response.status_code == 200
     data = response.json
     # If self-confrontation is not allowed, confrontations will be empty
     assert 'confrontations' in data
-    assert data['phase'] == 'execute'
+    assert data['phase'] == 'plan'  # Still in plan phase since only one player submitted
     # At least one force should have moved
     updated_state = data['state']
     p1_updated = updated_state['players'][0]
@@ -164,36 +171,48 @@ def test_invalid_order_insufficient_shih(client, sample_game_state):
     
     print(f"Initial Shih: {initial_state['players'][0]['shih']}")
 
-    # Submit two valid Deceive orders to drain Shih (10 - 3 - 3 = 4 left)
+    # Submit three valid Deceive orders to drain Shih (10 - 3 - 3 - 3 = 1 left)
     orders = [
         {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 1, 'r': 0}},
         {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 0, 'r': 1}},
-    ]
-    response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
-    assert response.status_code == 200
-    
-    # Check Shih after first batch
-    state_response = client.get(f'/api/game/{sample_game_state}/state')
-    state_after_first = state_response.json
-    print(f"Shih after first batch: {state_after_first['players'][0]['shih']}")
-
-    # Now submit two more, which should fail for insufficient Shih
-    orders = [
         {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 1, 'r': 0}},
-        {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 0, 'r': 1}},
     ]
-    response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
     assert response.status_code == 200
     data = response.json
-    
     print(f"Errors returned: {data['errors']}")
     print(f"Orders processed: {data['orders_processed']}")
+    # Should not have insufficient Shih error yet
+    assert not any('has insufficient Shih' in error for error in data['errors'])
+
+    # Now try to submit another Deceive order, which should fail for insufficient Shih
+    # First, advance to execute phase by submitting orders for player 2
+    p2_forces = initial_state['players'][1]['forces']
+    force2_id = p2_forces[0]['id']
     
-    # Check final Shih
-    state_response = client.get(f'/api/game/{sample_game_state}/state')
-    final_state = state_response.json
-    print(f"Final Shih: {final_state['players'][0]['shih']}")
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
     
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
+    assert response.status_code == 200
+    assert response.json['phase'] == 'execute'
+    
+    # Now perform upkeep to advance to next turn
+    upkeep_response = client.post(f'/api/game/{sample_game_state}/upkeep')
+    assert upkeep_response.status_code == 200
+    # Now submit another Deceive order
+    orders = [
+        {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 1, 'r': 0}},
+        {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 0, 'r': 1}},
+        {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 1, 'r': 0}},
+        {'force_id': force_id, 'order': 'Deceive', 'target_hex': {'q': 0, 'r': 1}},
+    ]
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
+    assert response.status_code == 200
+    data = response.json
+    print(f"Errors returned (insufficient Shih): {data['errors']}")
     assert any('has insufficient Shih' in error for error in data['errors'])
 
 
@@ -206,37 +225,37 @@ def test_ghost_confrontation(client, sample_game_state):
 
     p1_forces = initial_state['players'][0]['forces']
 
-    # P1 creates a ghost at (1,0)
-    deceive_orders = [{
-        'force_id': p1_forces[0]['id'],
-        'order': 'Deceive',
-        'target_hex': {'q': 1, 'r': 0}
-    }]
-    deceive_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': deceive_orders})
-    assert deceive_response.status_code == 200
-    deceive_data = deceive_response.json
-    assert deceive_data['orders_processed'] == 1
-    assert len(deceive_data['errors']) == 0
+    # Use force 0 (at 0,0) to Deceive at (1,0), and force 2 (at 0,1) to Advance to (1,0)
+    orders = [
+        {
+            'force_id': p1_forces[0]['id'],  # Force at (0,0)
+            'order': 'Deceive',
+            'target_hex': {'q': 1, 'r': 0}
+        },
+        {
+            'force_id': p1_forces[2]['id'],  # Force at (0,1)
+            'order': 'Advance',
+            'target_hex': {'q': 1, 'r': 0},
+            'stance': 'Mountain'
+        }
+    ]
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
+    assert response.status_code == 200
+    data = response.json
 
-    # Now have P1's other force advance into the ghost at (1,0)
-    advance_orders = [{
-        'force_id': p1_forces[1]['id'],
-        'order': 'Advance',
-        'target_hex': {'q': 1, 'r': 0},
-        'stance': 'Thunder'
-    }]
-    advance_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': advance_orders})
-    assert advance_response.status_code == 200
-    data = advance_response.json
-    assert 'confrontations' in data
-    assert data['phase'] == 'execute'
+    # Verify orders were processed
+    assert data['orders_processed'] == 2
+    assert data['phase'] == 'plan'  # Still in plan phase since only one player submitted
+    # No errors expected
+    assert len(data['errors']) == 0
+    # The advancing force should end up at (1,0)
     updated_state = data['state']
     p1_updated = updated_state['players'][0]
     positions = [f['position'] for f in p1_updated['forces']]
     assert {'q': 1, 'r': 0} in positions
 
 def test_phase_advancement(client, sample_game_state):
-    """Test phase advancement from 'plan' to 'execute'."""
+    """Test phase advancement from 'plan' to 'execute' when both players submit orders."""
     # Get initial state
     state_response = client.get(f'/api/game/{sample_game_state}/state')
     assert state_response.status_code == 200
@@ -246,19 +265,34 @@ def test_phase_advancement(client, sample_game_state):
     assert initial_state['phase'] == 'plan'
     
     p1_forces = initial_state['players'][0]['forces']
-    force_id = p1_forces[0]['id']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
     
-    # Submit any valid order to trigger phase advancement
-    orders = [{
-        'force_id': force_id,
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
         'order': 'Meditate'
     }]
     
-    response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
     assert response.status_code == 200
     data = response.json
     
-    # Verify phase advanced to 'execute'
+    # Verify phase is still 'plan' after first player submits
+    assert data['phase'] == 'plan'
+    
+    # Submit orders for player 2 to trigger phase advancement
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
+    assert response.status_code == 200
+    data = response.json
+    
+    # Verify phase advanced to 'execute' after both players submit
     assert data['phase'] == 'execute'
     assert data['state']['phase'] == 'execute'
     
@@ -282,7 +316,7 @@ def test_json_response_structure(client, sample_game_state):
         'order': 'Meditate'
     }]
     
-    response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
     assert response.status_code == 200
     data = response.json
     
@@ -329,21 +363,32 @@ def test_json_response_structure(client, sample_game_state):
 
 def test_shih_yields_from_contentious_terrain(client, sample_game_state):
     """Test Shih yields from controlled Contentious terrain (+2 per hex)."""
-    # First, advance to execute phase
+    # First, advance to execute phase by submitting orders for both players
     state_response = client.get(f'/api/game/{sample_game_state}/state')
     assert state_response.status_code == 200
     initial_state = state_response.json
     
     p1_forces = initial_state['players'][0]['forces']
-    force_id = p1_forces[0]['id']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
     
-    # Submit order to advance to execute phase
-    orders = [{
-        'force_id': force_id,
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
         'order': 'Meditate'
     }]
     
-    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert action_response.status_code == 200
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
     assert action_response.status_code == 200
     
     # Mock control of Contentious terrain by directly modifying the game state
@@ -381,21 +426,33 @@ def test_shih_yields_from_contentious_terrain(client, sample_game_state):
 
 def test_valid_upkeep_execute_phase(client, sample_game_state):
     """Test valid upkeep in 'execute' phase - check Shih yields, phase to 'plan', turn increment."""
-    # First, advance to execute phase by submitting an order
+    # First, advance to execute phase by submitting orders for both players
     state_response = client.get(f'/api/game/{sample_game_state}/state')
     assert state_response.status_code == 200
     initial_state = state_response.json
     
     p1_forces = initial_state['players'][0]['forces']
-    force_id = p1_forces[0]['id']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
     
-    # Submit any valid order to advance to execute phase
-    orders = [{
-        'force_id': force_id,
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
         'order': 'Meditate'
     }]
     
-    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert action_response.status_code == 200
+    assert action_response.json['phase'] == 'plan'  # Still in plan phase
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
     assert action_response.status_code == 200
     assert action_response.json['phase'] == 'execute'
     
@@ -413,13 +470,13 @@ def test_valid_upkeep_execute_phase(client, sample_game_state):
     assert 'encirclements' in data
     assert 'state' in data
     
-    # Verify phase advancement from 'execute' to 'upkeep'
-    assert data['phase'] == 'upkeep'
-    assert data['state']['phase'] == 'upkeep'
+    # Verify phase advancement from 'execute' to 'plan' (next turn)
+    assert data['phase'] == 'plan'
+    assert data['state']['phase'] == 'plan'
     
-    # Verify turn remains the same (turn increment happens when going from upkeep to plan)
-    assert data['turn'] == 1
-    assert data['state']['turn'] == 1
+    # Verify turn increments when going from upkeep to plan
+    assert data['turn'] == 2
+    assert data['state']['turn'] == 2
     
     # Verify Shih yields (should be 0 for initial positions as they don't control Contentious terrain)
     assert isinstance(data['shih_yields'], dict)
@@ -435,21 +492,32 @@ def test_valid_upkeep_execute_phase(client, sample_game_state):
 
 def test_encirclement_penalty_after_2_turns(client, sample_game_state):
     """Test encirclement penalty after 2 turns (-20 Chi)."""
-    # First, advance to execute phase
+    # First, advance to execute phase by submitting orders for both players
     state_response = client.get(f'/api/game/{sample_game_state}/state')
     assert state_response.status_code == 200
     initial_state = state_response.json
     
     p1_forces = initial_state['players'][0]['forces']
-    force_id = p1_forces[0]['id']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
     
-    # Submit order to advance to execute phase
-    orders = [{
-        'force_id': force_id,
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
         'order': 'Meditate'
     }]
     
-    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert action_response.status_code == 200
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
     assert action_response.status_code == 200
     
     # Mock encirclement by directly modifying the game state
@@ -491,21 +559,32 @@ def test_encirclement_penalty_after_2_turns(client, sample_game_state):
 
 def test_victory_by_demoralization(client, sample_game_state):
     """Test victory by demoralization (Chi <= 0 after penalty)."""
-    # First, advance to execute phase
+    # First, advance to execute phase by submitting orders for both players
     state_response = client.get(f'/api/game/{sample_game_state}/state')
     assert state_response.status_code == 200
     initial_state = state_response.json
     
     p1_forces = initial_state['players'][0]['forces']
-    force_id = p1_forces[0]['id']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
     
-    # Submit order to advance to execute phase
-    orders = [{
-        'force_id': force_id,
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
         'order': 'Meditate'
     }]
     
-    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert action_response.status_code == 200
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
     assert action_response.status_code == 200
     
     # Mock demoralization by directly modifying the game state
@@ -533,21 +612,32 @@ def test_victory_by_demoralization(client, sample_game_state):
 
 def test_domination_victory(client, sample_game_state):
     """Test domination victory (control all Contentious)."""
-    # First, advance to execute phase
+    # First, advance to execute phase by submitting orders for both players
     state_response = client.get(f'/api/game/{sample_game_state}/state')
     assert state_response.status_code == 200
     initial_state = state_response.json
     
     p1_forces = initial_state['players'][0]['forces']
-    force_id = p1_forces[0]['id']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
     
-    # Submit order to advance to execute phase
-    orders = [{
-        'force_id': force_id,
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
         'order': 'Meditate'
     }]
     
-    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert action_response.status_code == 200
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
     assert action_response.status_code == 200
     
     # Mock domination by directly modifying the game state
@@ -601,21 +691,32 @@ def test_error_not_execute_phase(client, sample_game_state):
 
 def test_upkeep_json_response_structure(client, sample_game_state):
     """Test JSON response structure (winner, shih_yields, encirclements, state)."""
-    # First, advance to execute phase
+    # First, advance to execute phase by submitting orders for both players
     state_response = client.get(f'/api/game/{sample_game_state}/state')
     assert state_response.status_code == 200
     initial_state = state_response.json
     
     p1_forces = initial_state['players'][0]['forces']
-    force_id = p1_forces[0]['id']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
     
-    # Submit order to advance to execute phase
-    orders = [{
-        'force_id': force_id,
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
         'order': 'Meditate'
     }]
     
-    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert action_response.status_code == 200
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
     assert action_response.status_code == 200
     
     # Perform upkeep
@@ -727,7 +828,7 @@ def test_get_game_log_populated_after_actions(client, sample_game_state):
         'stance': 'Mountain'
     }]
     
-    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    action_response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
     assert action_response.status_code == 200
     
     # Mock log entries by directly modifying the game state
@@ -838,3 +939,582 @@ def test_get_game_log_json_response_structure(client, sample_game_state):
         assert isinstance(entry, dict), "Log entries must be dictionaries"
         # Note: We don't enforce specific structure for log entries as they may vary
         # based on the type of event being logged
+
+
+def test_action_phase_validation_plan_only(client, sample_game_state):
+    """
+    Test that action endpoint only accepts orders during 'plan' phase.
+
+    Based on GDD page 5: Orders can only be submitted during plan phase.
+    """
+    # Get initial state to verify we're in 'plan' phase
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    assert initial_state['phase'] == 'plan'
+
+    # Submit valid orders for both players to move to 'execute' phase
+    p1_forces = initial_state['players'][0]['forces']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
+
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert response.status_code == 200
+    assert response.json['phase'] == 'plan'  # Still in plan phase
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
+    assert response.status_code == 200
+    assert response.json['phase'] == 'execute'
+    
+    # Now try to submit orders again while in 'execute' phase - should fail
+    orders = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 2, 'r': 0},
+        'stance': 'River'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
+    assert response.status_code == 400
+    assert 'Orders can only be submitted during \'plan\' phase' in response.json['error']
+
+
+def test_action_phase_transition_to_execute(client, sample_game_state):
+    """
+    Test that action endpoint correctly transitions from 'plan' to 'execute' phase.
+    
+    Based on GDD page 5: After processing orders, phase should be set to 'execute'.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    assert initial_state['phase'] == 'plan'
+    
+    # Submit orders for both players
+    p1_forces = initial_state['players'][0]['forces']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
+    
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert response.status_code == 200
+    assert response.json['phase'] == 'plan'  # Still in plan phase
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
+    assert response.status_code == 200
+    data = response.json
+    
+    # Verify phase transition to 'execute'
+    assert data['phase'] == 'execute'
+    assert data['state']['phase'] == 'execute'
+    
+    # Verify phase didn't advance to 'upkeep'
+    assert data['phase'] != 'upkeep'
+    assert data['state']['phase'] != 'upkeep'
+
+
+def test_action_phase_logging(client, sample_game_state):
+    """
+    Test that action endpoint logs phase transitions correctly.
+    
+    Based on GDD page 9: API should log phase transitions in game state log.
+    """
+    # Submit orders for both players to trigger phase transition
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
+    
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert response.status_code == 200
+    
+    # Submit orders for player 2 to trigger phase transition
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
+    assert response.status_code == 200
+    
+    # Check game log for phase transition entry
+    log_response = client.get(f'/api/game/{sample_game_state}/log')
+    assert log_response.status_code == 200
+    log_data = log_response.json
+    
+    # Verify log contains phase transition entry
+    phase_transition_entries = [
+        entry for entry in log_data['log'] 
+        if 'phase set to execute' in entry.get('event', '')
+    ]
+    assert len(phase_transition_entries) == 1
+    
+    # Verify log entry structure
+    log_entry = phase_transition_entries[0]
+    assert log_entry['turn'] == 1
+    assert log_entry['phase'] == 'execute'
+    assert 'Orders processed for player' in log_entry['event']
+    assert 'phase set to execute' in log_entry['event']
+
+
+def test_action_phase_validation_execute_phase(client, sample_game_state):
+    """
+    Test that action endpoint rejects orders when already in 'execute' phase.
+    
+    This test ensures the phase validation works correctly after a phase transition.
+    """
+    # First, submit orders for both players to move to 'execute' phase
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
+    
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders1})
+    assert response.status_code == 200
+    assert response.json['phase'] == 'plan'  # Still in plan phase
+    
+    # Submit orders for player 2 to advance to execute phase
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Meditate'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p2', 'orders': orders2})
+    assert response.status_code == 200
+    assert response.json['phase'] == 'execute'
+    
+    # Try to submit more orders while in 'execute' phase
+    orders = [{
+        'force_id': force1_id,
+        'order': 'Deceive',
+        'target_hex': {'q': 2, 'r': 0}
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'player_id': 'p1', 'orders': orders})
+    assert response.status_code == 400
+    assert 'Orders can only be submitted during \'plan\' phase' in response.json['error']
+    assert 'current phase: execute' in response.json['error']
+
+
+def test_player_id_required_in_action_request(client, sample_game_state):
+    """
+    Test that action endpoint requires player_id in request body.
+    
+    Based on new requirement: player_id is required to track order submissions.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    force_id = p1_forces[0]['id']
+    
+    # Submit orders without player_id - should fail
+    orders = [{
+        'force_id': force_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={'orders': orders})
+    assert response.status_code == 400
+    assert 'player_id is required' in response.json['error']
+
+
+def test_invalid_player_id_in_action_request(client, sample_game_state):
+    """
+    Test that action endpoint validates player_id exists.
+    
+    Based on new requirement: player_id must correspond to an existing player.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    force_id = p1_forces[0]['id']
+    
+    # Submit orders with invalid player_id - should fail
+    orders = [{
+        'force_id': force_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p3',  # Invalid player ID
+        'orders': orders
+    })
+    assert response.status_code == 400
+    assert 'Player p3 not found' in response.json['error']
+
+
+def test_duplicate_order_submission_prevention(client, sample_game_state):
+    """
+    Test that action endpoint prevents duplicate order submissions from same player.
+    
+    Based on new requirement: Each player can only submit orders once per turn.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    force_id = p1_forces[0]['id']
+    
+    # Submit orders for player 1
+    orders = [{
+        'force_id': force_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p1',
+        'orders': orders
+    })
+    assert response.status_code == 200
+    
+    # Try to submit orders again for player 1 - should fail
+    orders = [{
+        'force_id': force_id,
+        'order': 'Deceive',
+        'target_hex': {'q': 2, 'r': 0}
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p1',
+        'orders': orders
+    })
+    assert response.status_code == 400
+    assert 'Player p1 has already submitted orders for this turn' in response.json['error']
+
+
+def test_both_players_must_submit_orders_before_execute(client, sample_game_state):
+    """
+    Test that phase only transitions to 'execute' when both players have submitted orders.
+    
+    Based on new requirement: Phase transitions to 'execute' only when all players have submitted orders.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
+    
+    # Submit orders for player 1 only
+    orders1 = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p1',
+        'orders': orders1
+    })
+    assert response.status_code == 200
+    
+    # Verify phase is still 'plan' and orders_submitted shows p1 has submitted
+    data = response.json
+    assert data['phase'] == 'plan'
+    assert data['orders_submitted']['p1'] is True
+    assert data['orders_submitted'].get('p2', False) is False
+    
+    # Submit orders for player 2
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Advance',
+        'target_hex': {'q': 23, 'r': 18},
+        'stance': 'River'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p2',
+        'orders': orders2
+    })
+    assert response.status_code == 200
+    
+    # Verify phase is now 'execute' and orders_submitted is reset
+    data = response.json
+    assert data['phase'] == 'execute'
+    assert data['orders_submitted'] == {}
+
+
+def test_orders_submitted_tracking_in_game_state(client, sample_game_state):
+    """
+    Test that orders_submitted tracking is included in game state responses.
+    
+    Based on new requirement: orders_submitted should be included in all state responses.
+    """
+    # Get initial state
+    response = client.get(f'/api/game/{sample_game_state}/state')
+    assert response.status_code == 200
+    data = response.json
+    
+    # Verify orders_submitted is present and empty initially
+    assert 'orders_submitted' in data
+    assert data['orders_submitted'] == {}
+    
+    # Submit orders for player 1
+    p1_forces = data['players'][0]['forces']
+    force_id = p1_forces[0]['id']
+    
+    orders = [{
+        'force_id': force_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p1',
+        'orders': orders
+    })
+    assert response.status_code == 200
+    
+    # Verify orders_submitted shows p1 has submitted
+    data = response.json
+    assert data['orders_submitted']['p1'] is True
+    assert data['orders_submitted'].get('p2', False) is False
+    
+    # Verify state in response also includes orders_submitted
+    assert data['state']['orders_submitted']['p1'] is True
+    assert data['state']['orders_submitted'].get('p2', False) is False
+
+
+def test_order_submission_logging(client, sample_game_state):
+    """
+    Test that order submissions are logged correctly.
+    
+    Based on GDD page 9: API should log order submissions and phase transitions.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    force_id = p1_forces[0]['id']
+    
+    # Submit orders for player 1
+    orders = [{
+        'force_id': force_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p1',
+        'orders': orders
+    })
+    assert response.status_code == 200
+    
+    # Check game log for order submission entry
+    log_response = client.get(f'/api/game/{sample_game_state}/log')
+    assert log_response.status_code == 200
+    log_data = log_response.json
+    
+    # Verify log contains order submission entry
+    order_submission_entries = [
+        entry for entry in log_data['log'] 
+        if 'Orders processed for player p1' in entry.get('event', '')
+    ]
+    assert len(order_submission_entries) == 1
+    
+    # Verify log entry structure
+    log_entry = order_submission_entries[0]
+    assert log_entry['turn'] == 1
+    assert log_entry['phase'] == 'plan'
+    assert 'Orders processed for player p1' in log_entry['event']
+    assert 'waiting for other player' in log_entry['event']
+
+
+def test_phase_transition_logging_when_both_players_submit(client, sample_game_state):
+    """
+    Test that phase transition is logged when both players submit orders.
+    
+    Based on GDD page 9: API should log phase transitions when moving to execute.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
+    
+    # Submit orders for player 1
+    orders1 = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p1',
+        'orders': orders1
+    })
+    assert response.status_code == 200
+    
+    # Submit orders for player 2 (this should trigger phase transition)
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Advance',
+        'target_hex': {'q': 23, 'r': 18},
+        'stance': 'River'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p2',
+        'orders': orders2
+    })
+    assert response.status_code == 200
+    
+    # Check game log for phase transition entry
+    log_response = client.get(f'/api/game/{sample_game_state}/log')
+    assert log_response.status_code == 200
+    log_data = log_response.json
+    
+    # Verify log contains phase transition entry
+    phase_transition_entries = [
+        entry for entry in log_data['log'] 
+        if 'phase set to execute' in entry.get('event', '')
+    ]
+    assert len(phase_transition_entries) == 1
+    
+    # Verify log entry structure
+    log_entry = phase_transition_entries[0]
+    assert log_entry['turn'] == 1
+    assert log_entry['phase'] == 'execute'
+    assert 'Orders processed for player p2' in log_entry['event']
+    assert 'phase set to execute' in log_entry['event']
+
+
+def test_orders_submitted_reset_after_phase_transition(client, sample_game_state):
+    """
+    Test that orders_submitted is reset when transitioning to execute phase.
+    
+    Based on new requirement: orders_submitted should be reset for next turn.
+    """
+    # Get initial state
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    initial_state = state_response.json
+    
+    p1_forces = initial_state['players'][0]['forces']
+    p2_forces = initial_state['players'][1]['forces']
+    force1_id = p1_forces[0]['id']
+    force2_id = p2_forces[0]['id']
+    
+    # Submit orders for both players to trigger phase transition
+    orders1 = [{
+        'force_id': force1_id,
+        'order': 'Advance',
+        'target_hex': {'q': 1, 'r': 0},
+        'stance': 'Mountain'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p1',
+        'orders': orders1
+    })
+    assert response.status_code == 200
+    
+    orders2 = [{
+        'force_id': force2_id,
+        'order': 'Advance',
+        'target_hex': {'q': 23, 'r': 18},
+        'stance': 'River'
+    }]
+    
+    response = client.post(f'/api/game/{sample_game_state}/action', json={
+        'player_id': 'p2',
+        'orders': orders2
+    })
+    assert response.status_code == 200
+    
+    # Verify orders_submitted is reset
+    data = response.json
+    assert data['orders_submitted'] == {}
+    assert data['state']['orders_submitted'] == {}
+    
+    # Perform upkeep to advance to next turn's plan phase
+    response = client.post(f'/api/game/{sample_game_state}/upkeep')
+    assert response.status_code == 200
+    
+    # Verify we're back in plan phase with empty orders_submitted
+    state_response = client.get(f'/api/game/{sample_game_state}/state')
+    assert state_response.status_code == 200
+    data = state_response.json
+    assert data['phase'] == 'plan'
+    assert data['orders_submitted'] == {}
