@@ -18,8 +18,18 @@ class Order:
 
 def validate_order(order: Order, game_state: GameState) -> bool:
     """Validate if an order is legal based on game state and GDD rules."""
+    # Find the player that owns this force
+    player = None
+    for p in game_state.players:
+        if order.force in p.forces:
+            player = p
+            break
+    
+    if not player:
+        return False  # Force doesn't belong to any player
+    
     if order.order_type == OrderType.ADVANCE:
-        if order.force.shih < 2:
+        if player.shih < 2:
             return False  # Not enough Shih
         if not order.target_hex or not is_adjacent(order.force.position, order.target_hex):
             return False  # Invalid or non-adjacent target hex
@@ -31,7 +41,7 @@ def validate_order(order: Order, game_state: GameState) -> bool:
         if order.target_hex or order.stance:
             return False  # Meditate takes no target or stance
     elif order.order_type == OrderType.DECEIVE:
-        if order.force.shih < 3:
+        if player.shih < 3:
             return False  # Not enough Shih
         if not order.target_hex or not is_adjacent(order.force.position, order.target_hex):
             return False  # Invalid or non-adjacent target hex
