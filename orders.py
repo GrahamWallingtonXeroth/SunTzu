@@ -87,8 +87,9 @@ def validate_order(order: Order, game_state: GameState) -> bool:
         
         return True
         
-    except OrderValidationError:
-        return False
+    except OrderValidationError as e:
+        # Re-raise the exception to preserve the error message
+        raise e
 
 def is_adjacent(current: Tuple[int, int], target: Tuple[int, int]) -> bool:
     """Check if target hex is adjacent to current hex in axial coordinates."""
@@ -111,97 +112,101 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
     # Track forces that have already moved to prevent conflicts
     moved_forces: set = set()
     
-    # Validate all orders first
-    valid_orders = []
+    # Process orders one at a time to ensure proper Shih validation
     for order in orders:
-        if validate_order(order, game_state):
-            valid_orders.append(order)
-        else:
-            results["errors"].append(f"Invalid order for force {order.force.id}: {order.order_type.value}")
-
-    # Process orders by type to handle conflicts properly
-    # Process MEDITATE first (no movement, just information gathering)
-    for order in valid_orders:
-        if order.order_type == OrderType.MEDITATE:
-            player = next(p for p in game_state.players if order.force in p.forces)
-            
-            # Queue +2 Shih for next turn
-            queued_shih[player.id] += 2
-            
-            # Reveal adjacent enemy orders
-            for p in game_state.players:
-                if p != player:
-                    for f in p.forces:
-                        if is_adjacent(order.force.position, f.position):
-                            # Find the order for this force, if any
-                            for o in valid_orders:
-                                if o.force == f:
-                                    results["revealed_orders"].append((f.id, o.order_type.value))
-                                    break
-    
-    # Process DECEIVE orders (create ghosts)
-    for order in valid_orders:
-        if order.order_type == OrderType.DECEIVE:
-            player = next(p for p in game_state.players if order.force in p.forces)
-            
-            # Deduct Shih
-            player.update_shih(-3)
-            
-            # Create ghost in target hex (guaranteed to be non-None by validation)
-            target_hex = order.target_hex  # type: ignore
-            ghosts.append((target_hex, player.id))
-    
-    # Process ADVANCE orders (movement and confrontations)
-    for order in valid_orders:
-        if order.order_type == OrderType.ADVANCE:
-            player = next(p for p in game_state.players if order.force in p.forces)
-            
-            # Deduct Shih
-            player.update_shih(-2)
-            
-            # Guaranteed to be non-None by validation
-            target_hex = order.target_hex  # type: ignore
-            stance = order.stance  # type: ignore
-            
-            # Check if target hex is occupied by an enemy force or ghost
-            target_occupied = False
-            occupying_force = None
-            
-            # Check for enemy forces
-            for p in game_state.players:
-                if p != player:
-                    for f in p.forces:
-                        if f.position == target_hex:
-                            target_occupied = True
-                            occupying_force = f
-                            break
-                    if target_occupied:
-                        break
-            
-            # Check for ghosts
-            if not target_occupied:
-                for ghost_pos, ghost_owner in ghosts:
-                    if ghost_pos == target_hex and ghost_owner != player.id:
-                        target_occupied = True
-                        break
-            
-            if target_occupied:
-                # Queue confrontation
-                results["confrontations"].append({
-                    "attacking_force": order.force.id,
-                    "target_hex": target_hex,
-                    "attacking_stance": stance,
-                    "occupying_force": occupying_force.id if occupying_force else None,
-                    "ghost_owner": next((g[1] for g in ghosts if g[0] == target_hex), None)
-                })
-            else:
-                # Move to target hex if not occupied
-                order.force.position = target_hex
-                order.force.stance = stance
-                moved_forces.add(order.force.id)
+        try:
+            # Validate the order
+            if validate_order(order, game_state):
+                # Process the order based on its type
+                if order.order_type == OrderType.MEDITATE:
+                    player = next(p for p in game_state.players if order.force in p.forces)
+                    
+                    # Queue +2 Shih for next turn
+                    queued_shih[player.id] += 2
+                    
+                    # Add order to tendency (GDD page 6-7: Strategic Tendency)
+                    order.force.add_order_to_tendency(order.order_type.name)
+                    
+                    # Reveal adjacent enemy orders
+                    for p in game_state.players:
+                        if p != player:
+                            for f in p.forces:
+                                if is_adjacent(order.force.position, f.position):
+                                    # Find the order for this force, if any
+                                    for o in orders:
+                                        if o.force == f:
+                                            results["revealed_orders"].append((f.id, o.order_type.value))
+                                            break
                 
-                # Add order to tendency
-                order.force.add_order_to_tendency(order.order_type.value)
+                elif order.order_type == OrderType.DECEIVE:
+                    player = next(p for p in game_state.players if order.force in p.forces)
+                    
+                    # Deduct Shih
+                    player.update_shih(-3)
+                    
+                    # Add order to tendency (GDD page 6-7: Strategic Tendency)
+                    order.force.add_order_to_tendency(order.order_type.name)
+                    
+                    # Create ghost in target hex (guaranteed to be non-None by validation)
+                    target_hex = order.target_hex
+                    assert target_hex is not None  # Type assertion for mypy
+                    ghosts.append((target_hex, player.id))
+                
+                elif order.order_type == OrderType.ADVANCE:
+                    player = next(p for p in game_state.players if order.force in p.forces)
+                    
+                    # Deduct Shih
+                    player.update_shih(-2)
+                    
+                    # Guaranteed to be non-None by validation
+                    target_hex = order.target_hex
+                    stance = order.stance
+                    assert target_hex is not None  # Type assertion for mypy
+                    assert stance is not None  # Type assertion for mypy
+                    
+                    # Check if target hex is occupied by an enemy force or ghost
+                    target_occupied = False
+                    occupying_force = None
+                    
+                    # Check for enemy forces
+                    for p in game_state.players:
+                        if p != player:
+                            for f in p.forces:
+                                if f.position == target_hex:
+                                    target_occupied = True
+                                    occupying_force = f
+                                    break
+                            if target_occupied:
+                                break
+                    
+                    # Check for ghosts
+                    if not target_occupied:
+                        for ghost_pos, ghost_owner in ghosts:
+                            if ghost_pos == target_hex and ghost_owner != player.id:
+                                target_occupied = True
+                                break
+                    
+                    # Update force stance regardless of confrontation 
+                    # This ensures stances come from forces themselves during confrontation resolution (GDD page 5)
+                    order.force.stance = stance
+                    
+                    if target_occupied:
+                        # Queue confrontation
+                        results["confrontations"].append({
+                            "attacking_force": order.force.id,
+                            "target_hex": target_hex,
+                            "occupying_force": occupying_force.id if occupying_force else None,
+                            "ghost_owner": next((g[1] for g in ghosts if g[0] == target_hex), None)
+                        })
+                    else:
+                        # Move to target hex if not occupied
+                        order.force.position = target_hex
+                        moved_forces.add(order.force.id)
+                        
+                        # Add order to tendency (GDD page 6-7: Strategic Tendency)
+                        order.force.add_order_to_tendency(order.order_type.name)
+        except OrderValidationError as e:
+            results["errors"].append(f"Invalid order for force {order.force.id}: {order.order_type.value} - {str(e)}")
     
     # Apply queued Shih for next turn
     for player_id, shih_amount in queued_shih.items():
