@@ -30,9 +30,14 @@ automatic_scaling:
   # Set to 0 to allow scaling down to zero when no traffic (cost optimization)
   min_instances: 0
 
-# Basic settings
-# Enable HTTPS by default for security
-secure: always
+# URL handlers configuration
+# This section defines how requests are routed to your application
+handlers:
+  # Catch-all handler for all routes - routes all requests to the Flask app
+  - url: /.*
+    script: auto
+    # Enable HTTPS by default for security - redirects HTTP to HTTPS
+    secure: always
 
 # Notes for deployment:
 # 1. Using gunicorn for production-grade WSGI server
