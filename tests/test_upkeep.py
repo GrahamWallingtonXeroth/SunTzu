@@ -25,7 +25,7 @@ class TestUpkeep(unittest.TestCase):
         self.game_state = GameState(
             game_id="test_game",
             turn=1,
-            phase='upkeep',
+            phase='execute',  # Changed to 'execute' for proper upkeep testing
             players=[],
             map_data={}
         )
@@ -130,6 +130,94 @@ class TestUpkeep(unittest.TestCase):
         self.assertIn('players', summary)
         self.assertIn('p1', summary['players'])
         self.assertIn('p2', summary['players'])
+    
+    def test_perform_upkeep_phase_validation(self):
+        """Test that upkeep raises error when not in 'execute' phase."""
+        # Test with 'plan' phase
+        self.game_state.phase = 'plan'
+        with self.assertRaises(ValueError) as context:
+            perform_upkeep(self.game_state)
+        self.assertIn("Upkeep can only be performed during 'execute' phase", str(context.exception))
+        
+        # Test with 'upkeep' phase
+        self.game_state.phase = 'upkeep'
+        with self.assertRaises(ValueError) as context:
+            perform_upkeep(self.game_state)
+        self.assertIn("Upkeep can only be performed during 'execute' phase", str(context.exception))
+    
+    def test_perform_upkeep_phase_transition(self):
+        """Test that upkeep properly transitions from 'execute' to 'plan' phase and increments turn."""
+        # Reset to execute phase
+        self.game_state.phase = 'execute'
+        self.game_state.turn = 1
+        
+        results = perform_upkeep(self.game_state)
+        
+        # Check that phase changed to 'plan'
+        self.assertEqual(self.game_state.phase, 'plan')
+        # Check that turn incremented
+        self.assertEqual(self.game_state.turn, 2)
+        # Check that no winner was determined (normal case)
+        self.assertIsNone(results['winner'])
+    
+    def test_perform_upkeep_turn_increment_logging(self):
+        """Test that turn completion is properly logged before incrementing."""
+        self.game_state.phase = 'execute'
+        self.game_state.turn = 3
+        initial_log_length = len(self.game_state.log)
+        
+        results = perform_upkeep(self.game_state)
+        
+        # Check that a log entry was added for turn completion
+        self.assertGreater(len(self.game_state.log), initial_log_length)
+        
+        # Find the turn completion log entry
+        turn_completion_log = None
+        for log_entry in self.game_state.log:
+            event = log_entry.get('event', '')
+            if event and 'Turn 3 completed, advancing to plan phase of turn 4' in event:
+                turn_completion_log = log_entry
+                break
+        
+        self.assertIsNotNone(turn_completion_log)
+        if turn_completion_log:
+            self.assertEqual(turn_completion_log['turn'], 3)
+            self.assertEqual(turn_completion_log['phase'], 'execute')
+    
+    def test_perform_upkeep_no_turn_increment_on_victory(self):
+        """Test that turn doesn't increment when a winner is determined."""
+        self.game_state.phase = 'execute'
+        self.game_state.turn = 5
+        
+        # Set player1's Chi to 0 to trigger victory
+        self.player1.chi = 0
+        
+        results = perform_upkeep(self.game_state)
+        
+        # Check that a winner was determined
+        self.assertEqual(results['winner'], 'p2')
+        # Check that turn didn't increment (game is over)
+        self.assertEqual(self.game_state.turn, 5)
+        # Check that phase didn't change (game is over)
+        self.assertEqual(self.game_state.phase, 'execute')
+    
+    def test_perform_upkeep_multiple_turns(self):
+        """Test that upkeep works correctly across multiple turns."""
+        self.game_state.phase = 'execute'
+        self.game_state.turn = 1
+        
+        # Perform upkeep for turn 1
+        results1 = perform_upkeep(self.game_state)
+        self.assertEqual(self.game_state.turn, 2)
+        self.assertEqual(self.game_state.phase, 'plan')
+        
+        # Simulate advancing to execute phase for turn 2
+        self.game_state.phase = 'execute'
+        
+        # Perform upkeep for turn 2
+        results2 = perform_upkeep(self.game_state)
+        self.assertEqual(self.game_state.turn, 3)
+        self.assertEqual(self.game_state.phase, 'plan')
 
 
 if __name__ == '__main__':

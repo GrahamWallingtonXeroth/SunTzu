@@ -30,6 +30,7 @@ class GameState:
     players: List[Player] = field(default_factory=list)  # List of players
     map_data: Dict[Tuple[int, int], Hex] = field(default_factory=dict)  # Map data
     log: List[Dict[str, Any]] = field(default_factory=list)  # Game log for analysis
+    orders_submitted: Dict[str, bool] = field(default_factory=dict)  # Track which players have submitted orders
     
     def get_player_by_id(self, player_id: str) -> Optional[Player]:
         """Get a player by their ID."""
@@ -164,7 +165,8 @@ def initialize_game(seed: int) -> GameState:
         phase='plan',
         players=[player1, player2],
         map_data=map_data,
-        log=[]  # Initialize empty game log
+        log=[],  # Initialize empty game log
+        orders_submitted={}  # Initialize empty orders tracking
     )
     
     return game_state
