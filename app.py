@@ -311,5 +311,28 @@ def perform_upkeep_phase(game_id: str):
     except Exception as e:
         return jsonify({'error': f'Failed to perform upkeep: {str(e)}'}), 500
 
+@app.route('/api/game/<game_id>/log', methods=['GET'])
+def get_game_log(game_id: str):
+    """Retrieve the full game log for analysis."""
+    try:
+        # Validate game_id exists
+        if game_id not in games:
+            return jsonify({'error': 'Game not found'}), 404
+        
+        game_state = games[game_id]
+        
+        # Prepare response with game log
+        log_response = {
+            'game_id': game_id,
+            'turn': game_state.turn,
+            'phase': game_state.phase,
+            'log': game_state.log
+        }
+        
+        return jsonify(log_response)
+    
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve game log: {str(e)}'}), 500
+
 if __name__ == '__main__':
     app.run(debug=True)

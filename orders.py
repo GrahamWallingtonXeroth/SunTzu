@@ -20,6 +20,23 @@ class OrderValidationError(Exception):
     """Exception raised when an order fails validation."""
     pass
 
+def log_event(game_state: GameState, event: str, **kwargs) -> None:
+    """
+    Add an event to the game state log.
+    
+    Args:
+        game_state: Current game state
+        event: Description of the event
+        **kwargs: Additional event data to include
+    """
+    log_entry = {
+        'turn': game_state.turn,
+        'phase': game_state.phase,
+        'event': event,
+        **kwargs
+    }
+    game_state.log.append(log_entry)
+
 def validate_order(order: Order, game_state: GameState) -> bool:
     """Validate if an order is legal based on game state and GDD rules."""
     try:
@@ -112,22 +129,38 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
     # Track forces that have already moved to prevent conflicts
     moved_forces: set = set()
     
+    # Log order resolution start
+    log_event(game_state, f"Order resolution phase started with {len(orders)} orders")
+    
     # Process orders one at a time to ensure proper Shih validation
     for order in orders:
         try:
+            # Find the player that owns this force
+            player = next(p for p in game_state.players if order.force in p.forces)
+            
+            # Log order submission
+            target_info = f" to {order.target_hex}" if order.target_hex else ""
+            stance_info = f" with {order.stance} stance" if order.stance else ""
+            log_event(game_state, f"Player {player.id} submitted {order.order_type.value} for force {order.force.id}{target_info}{stance_info}")
+            
             # Validate the order
             if validate_order(order, game_state):
+                # Log successful validation
+                log_event(game_state, f"Order validated successfully for force {order.force.id}")
+                
                 # Process the order based on its type
                 if order.order_type == OrderType.MEDITATE:
-                    player = next(p for p in game_state.players if order.force in p.forces)
-                    
                     # Queue +2 Shih for next turn
                     queued_shih[player.id] += 2
                     
                     # Add order to tendency (GDD page 6-7: Strategic Tendency)
                     order.force.add_order_to_tendency(order.order_type.name)
                     
+                    # Log meditation effect
+                    log_event(game_state, f"Force {order.force.id} meditated, queued +2 Shih for next turn")
+                    
                     # Reveal adjacent enemy orders
+                    revealed_count = 0
                     for p in game_state.players:
                         if p != player:
                             for f in p.forces:
@@ -136,11 +169,14 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                                     for o in orders:
                                         if o.force == f:
                                             results["revealed_orders"].append((f.id, o.order_type.value))
+                                            revealed_count += 1
+                                            log_event(game_state, f"Meditation revealed {o.order_type.value} order for force {f.id}")
                                             break
+                    
+                    if revealed_count > 0:
+                        log_event(game_state, f"Meditation revealed {revealed_count} adjacent enemy orders")
                 
                 elif order.order_type == OrderType.DECEIVE:
-                    player = next(p for p in game_state.players if order.force in p.forces)
-                    
                     # Deduct Shih
                     player.update_shih(-3)
                     
@@ -151,10 +187,12 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                     target_hex = order.target_hex
                     assert target_hex is not None  # Type assertion for mypy
                     ghosts.append((target_hex, player.id))
+                    
+                    # Log deception and ghost creation
+                    log_event(game_state, f"Player {player.id} spent 3 Shih on deception")
+                    log_event(game_state, f"Force {order.force.id} created ghost at {target_hex}")
                 
                 elif order.order_type == OrderType.ADVANCE:
-                    player = next(p for p in game_state.players if order.force in p.forces)
-                    
                     # Deduct Shih
                     player.update_shih(-2)
                     
@@ -163,6 +201,9 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                     stance = order.stance
                     assert target_hex is not None  # Type assertion for mypy
                     assert stance is not None  # Type assertion for mypy
+                    
+                    # Log Shih expenditure
+                    log_event(game_state, f"Player {player.id} spent 2 Shih on advance")
                     
                     # Check if target hex is occupied by an enemy force or ghost
                     target_occupied = False
@@ -184,6 +225,7 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                         for ghost_pos, ghost_owner in ghosts:
                             if ghost_pos == target_hex and ghost_owner != player.id:
                                 target_occupied = True
+                                log_event(game_state, f"Advance into ghost at {target_hex} by enemy player {ghost_owner}")
                                 break
                     
                     # Update force stance regardless of confrontation 
@@ -192,21 +234,45 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                     
                     if target_occupied:
                         # Queue confrontation
-                        results["confrontations"].append({
+                        confrontation_data = {
                             "attacking_force": order.force.id,
                             "target_hex": target_hex,
                             "occupying_force": occupying_force.id if occupying_force else None,
                             "ghost_owner": next((g[1] for g in ghosts if g[0] == target_hex), None)
-                        })
+                        }
+                        results["confrontations"].append(confrontation_data)
+                        
+                        # Log confrontation
+                        if occupying_force:
+                            log_event(game_state, f"Confrontation initiated: {order.force.id} ({stance}) vs {occupying_force.id} at {target_hex}")
+                        else:
+                            log_event(game_state, f"Ghost confrontation: {order.force.id} ({stance}) vs ghost at {target_hex}")
                     else:
                         # Move to target hex if not occupied
+                        old_position = order.force.position
                         order.force.position = target_hex
                         moved_forces.add(order.force.id)
                         
                         # Add order to tendency (GDD page 6-7: Strategic Tendency)
                         order.force.add_order_to_tendency(order.order_type.name)
+                        
+                        # Log successful movement
+                        log_event(game_state, f"Force {order.force.id} moved from {old_position} to {target_hex} with {stance} stance")
+                        
+                        # Check if movement was into Contentious Ground for Shih bonus
+                        if target_hex in game_state.map_data:
+                            terrain = game_state.map_data[target_hex].terrain
+                            if terrain == "Contentious":
+                                log_event(game_state, f"Force {order.force.id} entered Contentious Ground at {target_hex}")
+                        
         except OrderValidationError as e:
-            results["errors"].append(f"Invalid order for force {order.force.id}: {order.order_type.value} - {str(e)}")
+            error_msg = f"Invalid order for force {order.force.id}: {order.order_type.value} - {str(e)}"
+            results["errors"].append(error_msg)
+            log_event(game_state, error_msg, error_type="validation_error")
+        except Exception as e:
+            error_msg = f"Unexpected error processing order for force {order.force.id}: {str(e)}"
+            results["errors"].append(error_msg)
+            log_event(game_state, error_msg, error_type="processing_error")
     
     # Apply queued Shih for next turn
     for player_id, shih_amount in queued_shih.items():
@@ -214,6 +280,10 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
             player = game_state.get_player_by_id(player_id)
             if player:
                 player.update_shih(shih_amount)
+                log_event(game_state, f"Player {player_id} gained {shih_amount} Shih from meditation")
+    
+    # Log resolution completion
+    log_event(game_state, f"Order resolution completed: {len(results['confrontations'])} confrontations, {len(ghosts)} ghosts created")
     
     return results
 
@@ -239,6 +309,9 @@ def validate_orders_batch(orders: List[Order], game_state: GameState) -> Dict[st
     errors = []
     valid_orders = []
     
+    # Log batch validation start
+    log_event(game_state, f"Batch validation started for {len(orders)} orders")
+    
     for order in orders:
         try:
             if validate_order(order, game_state):
@@ -247,6 +320,9 @@ def validate_orders_batch(orders: List[Order], game_state: GameState) -> Dict[st
                 errors.append(f"Order validation failed for force {order.force.id}")
         except Exception as e:
             errors.append(f"Error validating order for force {order.force.id}: {str(e)}")
+    
+    # Log batch validation results
+    log_event(game_state, f"Batch validation completed: {len(valid_orders)} valid, {len(errors)} errors")
     
     return {
         "valid_orders": [get_order_summary(order) for order in valid_orders],

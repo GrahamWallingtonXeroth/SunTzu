@@ -14,6 +14,24 @@ from models import Player, Force, Hex
 from state import GameState
 
 
+def log_event(game_state: GameState, event: str, **kwargs) -> None:
+    """
+    Add an event to the game state log.
+    
+    Args:
+        game_state: Current game state
+        event: Description of the event
+        **kwargs: Additional event data to include
+    """
+    log_entry = {
+        'turn': game_state.turn,
+        'phase': game_state.phase,
+        'event': event,
+        **kwargs
+    }
+    game_state.log.append(log_entry)
+
+
 def get_adjacent_positions(position: Tuple[int, int]) -> List[Tuple[int, int]]:
     """
     Get all adjacent hex positions using axial coordinate system.
@@ -92,10 +110,17 @@ def calculate_shih_yield(player: Player, game_state: GameState) -> int:
         Amount of Shih to yield (+2 per controlled Contentious hex)
     """
     shih_yield = 0
+    controlled_hexes = []
     
     for hex_pos, hex_data in game_state.map_data.items():
         if hex_data.terrain == 'Contentious' and is_controlled(hex_pos, player, game_state):
             shih_yield += 2
+            controlled_hexes.append(hex_pos)
+    
+    # Log controlled Contentious terrain
+    if controlled_hexes:
+        log_event(game_state, f"Player {player.id} controls {len(controlled_hexes)} Contentious hexes", 
+                 player_id=player.id, controlled_hexes=controlled_hexes, shih_yield=shih_yield)
     
     return shih_yield
 
@@ -168,9 +193,11 @@ def check_victory(game_state: GameState) -> Optional[str]:
     # Check for Demoralization (Chi <= 0)
     for player in game_state.players:
         if player.chi <= 0:
-            # Return the other player as winner
+            # Find the other player as winner
             for other_player in game_state.players:
                 if other_player.id != player.id:
+                    log_event(game_state, f"Victory by Demoralization: {other_player.id} wins - {player.id} Chi dropped to {player.chi}", 
+                             winner_id=other_player.id, loser_id=player.id, victory_type="demoralization")
                     return other_player.id
     
     # Check for Domination (control all Contentious terrain for one full turn)
@@ -182,14 +209,20 @@ def check_victory(game_state: GameState) -> Optional[str]:
         for force in player.forces:
             if force.encircled_turns >= 2:
                 # Apply -20 Chi penalty for being encircled for 2+ turns
+                old_chi = player.chi
                 player.update_chi(-20)
                 # Reset encircled turns after applying penalty
                 force.encircled_turns = 0
+                
+                log_event(game_state, f"Encirclement penalty: {player.id} loses 20 Chi (was {old_chi}, now {player.chi})", 
+                         player_id=player.id, force_id=force.id, chi_loss=20, old_chi=old_chi, new_chi=player.chi)
                 
                 # Check if this caused demoralization
                 if player.chi <= 0:
                     for other_player in game_state.players:
                         if other_player.id != player.id:
+                            log_event(game_state, f"Victory by Encirclement: {other_player.id} wins - {player.id} Chi dropped to {player.chi} from encirclement", 
+                                     winner_id=other_player.id, loser_id=player.id, victory_type="encirclement")
                             return other_player.id
     
     return None
@@ -214,20 +247,31 @@ def perform_upkeep(game_state: GameState) -> Dict:
         'encirclements': []
     }
     
+    # Log upkeep phase start
+    log_event(game_state, "Upkeep phase started", turn=game_state.turn)
+    
     # Apply queued Shih actions (this would be implemented based on queued actions)
     # For now, we'll assume no queued actions to apply
     
     # Calculate and apply Shih yields from controlled Contentious terrain
     for player in game_state.players:
+        old_shih = player.shih
         shih_yield = calculate_shih_yield(player, game_state)
         player.update_shih(shih_yield)
         results['shih_yields'][player.id] = shih_yield
+        
+        if shih_yield > 0:
+            log_event(game_state, f"Player {player.id} gains {shih_yield} Shih from Contentious terrain (was {old_shih}, now {player.shih})", 
+                     player_id=player.id, shih_gained=shih_yield, old_shih=old_shih, new_shih=player.shih)
     
     # Check for encirclements and update encircled_turns
     for player in game_state.players:
         for force in player.forces:
             if is_encircled(force, game_state):
                 force.encircled_turns += 1
+                log_event(game_state, f"Force {force.id} ({player.id}) is encircled for {force.encircled_turns} turn(s)", 
+                         player_id=player.id, force_id=force.id, encircled_turns=force.encircled_turns)
+                
                 if force.encircled_turns >= 2:
                     results['encirclements'].append({
                         'force_id': force.id,
@@ -236,15 +280,25 @@ def perform_upkeep(game_state: GameState) -> Dict:
                     })
             else:
                 # Reset encircled turns if no longer encircled
-                force.encircled_turns = 0
+                if force.encircled_turns > 0:
+                    log_event(game_state, f"Force {force.id} ({player.id}) is no longer encircled", 
+                             player_id=player.id, force_id=force.id, previous_encircled_turns=force.encircled_turns)
+                    force.encircled_turns = 0
     
     # Check victory conditions
     winner = check_victory(game_state)
     results['winner'] = winner
     
-    # Advance turn and reset phase to 'plan' (unless game is over)
-    if not winner:
+    if winner:
+        log_event(game_state, f"Game Over: {winner} is victorious!", winner_id=winner, game_end_turn=game_state.turn)
+    else:
+        # Advance turn and reset phase to 'plan' (unless game is over)
+        old_turn = game_state.turn
+        old_phase = game_state.phase
         game_state.advance_phase()
+        
+        log_event(game_state, f"Turn {old_turn} completed, advancing to {game_state.phase} phase of turn {game_state.turn}", 
+                 previous_turn=old_turn, previous_phase=old_phase, new_turn=game_state.turn, new_phase=game_state.phase)
     
     return results
 

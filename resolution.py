@@ -20,6 +20,14 @@ def resolve_confrontation(attacker: Force, defender: Optional[Force], target_hex
     if not defender:
         attacker.position = target_hex
         result["retreats"].append((attacker.id, target_hex))
+        
+        # Log ghost confrontation
+        game_state.log.append({
+            'turn': game_state.turn,
+            'phase': game_state.phase,
+            'event': f'Ghost confrontation: {attacker.id} moves to {target_hex}'
+        })
+        
         return result
 
     # Load configuration from config.json
@@ -60,39 +68,85 @@ def resolve_confrontation(attacker: Force, defender: Optional[Force], target_hex
         result["chi_loss"].append((attacker.id, attacker_chi_loss))
         result["chi_loss"].append((defender.id, defender_chi_loss))
 
+        # Log stalemate
+        game_state.log.append({
+            'turn': game_state.turn,
+            'phase': game_state.phase,
+            'event': f'Confrontation between {attacker.id} ({attacker.stance}) and {defender.id} ({defender.stance}): Stalemate, both lose {attacker_chi_loss} Chi'
+        })
+
         # Attempt retreat for both
         attacker_retreat_hex = find_retreat_hex(attacker, game_state)
         defender_retreat_hex = find_retreat_hex(defender, game_state)
         if attacker_retreat_hex:
             attacker.position = attacker_retreat_hex
             result["retreats"].append((attacker.id, attacker_retreat_hex))
+            game_state.log.append({
+                'turn': game_state.turn,
+                'phase': game_state.phase,
+                'event': f'{attacker.id} retreats to {attacker_retreat_hex}'
+            })
         if defender_retreat_hex:
             defender.position = defender_retreat_hex
             result["retreats"].append((defender.id, defender_retreat_hex))
+            game_state.log.append({
+                'turn': game_state.turn,
+                'phase': game_state.phase,
+                'event': f'{defender.id} retreats to {defender_retreat_hex}'
+            })
     elif winner == "attacker":
         # Attacker wins
         defender_chi_loss = base_chi_loss * terrain_multiplier
         defender_player.chi = max(0, defender_player.chi - defender_chi_loss)
         result["chi_loss"].append((defender.id, defender_chi_loss))
 
+        # Log attacker victory
+        game_state.log.append({
+            'turn': game_state.turn,
+            'phase': game_state.phase,
+            'event': f'Confrontation between {attacker.id} ({attacker.stance}) and {defender.id} ({defender.stance}): {attacker.id} wins, {defender.id} loses {defender_chi_loss} Chi'
+        })
+
         # Defender retreats, attacker moves
         retreat_hex = find_retreat_hex(defender, game_state)
         if retreat_hex:
             defender.position = retreat_hex
             result["retreats"].append((defender.id, retreat_hex))
+            game_state.log.append({
+                'turn': game_state.turn,
+                'phase': game_state.phase,
+                'event': f'{defender.id} retreats to {retreat_hex}'
+            })
         attacker.position = target_hex
         result["retreats"].append((attacker.id, target_hex))
+        game_state.log.append({
+            'turn': game_state.turn,
+            'phase': game_state.phase,
+            'event': f'{attacker.id} advances to {target_hex}'
+        })
     else:  # winner == "defender"
         # Defender wins
         attacker_chi_loss = base_chi_loss * terrain_multiplier
         attacker_player.chi = max(0, attacker_player.chi - attacker_chi_loss)
         result["chi_loss"].append((attacker.id, attacker_chi_loss))
 
+        # Log defender victory
+        game_state.log.append({
+            'turn': game_state.turn,
+            'phase': game_state.phase,
+            'event': f'Confrontation between {attacker.id} ({attacker.stance}) and {defender.id} ({defender.stance}): {defender.id} wins, {attacker.id} loses {attacker_chi_loss} Chi'
+        })
+
         # Attacker retreats
         retreat_hex = find_retreat_hex(attacker, game_state)
         if retreat_hex:
             attacker.position = retreat_hex
             result["retreats"].append((attacker.id, retreat_hex))
+            game_state.log.append({
+                'turn': game_state.turn,
+                'phase': game_state.phase,
+                'event': f'{attacker.id} retreats to {retreat_hex}'
+            })
 
     return result
 

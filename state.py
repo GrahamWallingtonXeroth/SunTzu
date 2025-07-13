@@ -12,7 +12,7 @@ import uuid
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from map_gen import generate_map
 from models import Force, Player, Hex
 
@@ -29,6 +29,7 @@ class GameState:
     phase: str = 'plan'  # Current phase: 'plan', 'execute', 'upkeep'
     players: List[Player] = field(default_factory=list)  # List of players
     map_data: Dict[Tuple[int, int], Hex] = field(default_factory=dict)  # Map data
+    log: List[Dict[str, Any]] = field(default_factory=list)  # Game log for analysis
     
     def get_player_by_id(self, player_id: str) -> Optional[Player]:
         """Get a player by their ID."""
@@ -162,7 +163,8 @@ def initialize_game(seed: int) -> GameState:
         turn=1,
         phase='plan',
         players=[player1, player2],
-        map_data=map_data
+        map_data=map_data,
+        log=[]  # Initialize empty game log
     )
     
     return game_state
