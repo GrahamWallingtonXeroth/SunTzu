@@ -342,7 +342,8 @@ def perform_upkeep_phase(game_id: str):
             'phase': game_state.phase,
             'winner': winner,
             'shih_yields': upkeep_results.get('shih_yields', {}),
-            'encirclements': upkeep_results.get('encirclements', [])
+            'encirclements': upkeep_results.get('encirclements', []),
+            'meditate_shih_yields': upkeep_results.get('meditate_shih_yields', {})
         }
         
         # Include updated game state

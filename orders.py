@@ -123,11 +123,12 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
     results = {"revealed_orders": [], "confrontations": [], "errors": []}
     ghosts: List[Tuple[Tuple[int, int], str]] = []  # Track ghost positions: (position, owner_id)
     
-    # Track queued Shih for next turn
-    queued_shih: Dict[str, int] = {player.id: 0 for player in game_state.players}
-    
     # Track forces that have already moved to prevent conflicts
     moved_forces: set = set()
+    
+    # Initialize last_orders for this turn if not exists
+    if not hasattr(game_state, 'last_orders'):
+        game_state.last_orders = {}
     
     # Log order resolution start
     log_event(game_state, f"Order resolution phase started with {len(orders)} orders")
@@ -150,14 +151,21 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                 
                 # Process the order based on its type
                 if order.order_type == OrderType.MEDITATE:
-                    # Queue +2 Shih for next turn
-                    queued_shih[player.id] += 2
+                    # Store Meditate order for next turn's upkeep (GDD: +2 Shih next turn)
+                    if player.id not in game_state.last_orders:
+                        game_state.last_orders[player.id] = []
+                    
+                    game_state.last_orders[player.id].append({
+                        'order_type': 'Meditate',
+                        'force_id': order.force.id,
+                        'shih_bonus': 2
+                    })
                     
                     # Add order to tendency (GDD page 6-7: Strategic Tendency)
                     order.force.add_order_to_tendency(order.order_type.name)
                     
                     # Log meditation effect
-                    log_event(game_state, f"Force {order.force.id} meditated, queued +2 Shih for next turn")
+                    log_event(game_state, f"Force {order.force.id} meditated, queued +2 Shih for next turn's upkeep")
                     
                     # Reveal adjacent enemy orders
                     revealed_count = 0
@@ -273,14 +281,6 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
             error_msg = f"Unexpected error processing order for force {order.force.id}: {str(e)}"
             results["errors"].append(error_msg)
             log_event(game_state, error_msg, error_type="processing_error")
-    
-    # Apply queued Shih for next turn
-    for player_id, shih_amount in queued_shih.items():
-        if shih_amount > 0:
-            player = game_state.get_player_by_id(player_id)
-            if player:
-                player.update_shih(shih_amount)
-                log_event(game_state, f"Player {player_id} gained {shih_amount} Shih from meditation")
     
     # Log resolution completion
     log_event(game_state, f"Order resolution completed: {len(results['confrontations'])} confrontations, {len(ghosts)} ghosts created")

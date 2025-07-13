@@ -251,14 +251,36 @@ def perform_upkeep(game_state: GameState) -> Dict:
     results = {
         'winner': None,
         'shih_yields': {},
-        'encirclements': []
+        'encirclements': [],
+        'meditate_shih_yields': {}
     }
     
     # Log upkeep phase start
     log_event(game_state, "Upkeep phase started", turn=game_state.turn)
     
-    # Apply queued Shih actions (this would be implemented based on queued actions)
-    # For now, we'll assume no queued actions to apply
+    # Apply Meditate orders from previous turn (+2 Shih per force, max 20)
+    meditate_shih_yields = {}
+    for player_id, orders in game_state.last_orders.items():
+        player = game_state.get_player_by_id(player_id)
+        if player:
+            meditate_count = sum(1 for order in orders if order.get('order_type') == 'Meditate')
+            if meditate_count > 0:
+                # Calculate total Shih from meditation (2 per force)
+                total_meditate_shih = meditate_count * 2
+                old_shih = player.shih
+                player.update_shih(total_meditate_shih)
+                actual_shih_gained = player.shih - old_shih
+                meditate_shih_yields[player_id] = actual_shih_gained
+                
+                log_event(game_state, f"Player {player_id} gains {actual_shih_gained} Shih from {meditate_count} Meditate orders (was {old_shih}, now {player.shih})", 
+                         player_id=player_id, meditate_count=meditate_count, shih_gained=actual_shih_gained, 
+                         old_shih=old_shih, new_shih=player.shih)
+                
+                # Store in results for API response
+                results['meditate_shih_yields'][player_id] = actual_shih_gained
+    
+    # Clear last_orders after applying them
+    game_state.last_orders = {}
     
     # Calculate and apply Shih yields from controlled Contentious terrain
     for player in game_state.players:

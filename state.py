@@ -31,6 +31,7 @@ class GameState:
     map_data: Dict[Tuple[int, int], Hex] = field(default_factory=dict)  # Map data
     log: List[Dict[str, Any]] = field(default_factory=list)  # Game log for analysis
     orders_submitted: Dict[str, bool] = field(default_factory=dict)  # Track which players have submitted orders
+    last_orders: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)  # Track orders from previous turn for upkeep effects
     
     def get_player_by_id(self, player_id: str) -> Optional[Player]:
         """Get a player by their ID."""
