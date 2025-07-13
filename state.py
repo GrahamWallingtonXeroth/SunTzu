@@ -9,6 +9,8 @@ Map: 25x20 hexes with axial coordinate system
 
 from __future__ import annotations
 import uuid
+import json
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
 from map_gen import generate_map
@@ -80,21 +82,27 @@ def create_force(force_id: str, position: Tuple[int, int], stance: str = 'Mounta
     )
 
 
-def create_player(player_id: str, starting_positions: List[Tuple[int, int]]) -> Player:
+def create_player(player_id: str, starting_positions: List[Tuple[int, int]], 
+                 starting_chi: int = 100, starting_shih: int = 10, 
+                 force_count: int = 3, max_shih: int = 20) -> Player:
     """
     Create a new player with forces at the specified starting positions.
     
     Args:
         player_id: Player identifier ('p1' or 'p2')
-        starting_positions: List of 3 starting positions for forces
+        starting_positions: List of starting positions for forces
+        starting_chi: Starting Chi value (default: 100)
+        starting_shih: Starting Shih value (default: 10)
+        force_count: Number of forces to create (default: 3)
+        max_shih: Maximum Shih value (default: 20)
     
     Returns:
-        New Player instance with 3 forces
+        New Player instance with forces
     """
-    player = Player(id=player_id)
+    player = Player(id=player_id, chi=starting_chi, shih=starting_shih, max_shih=max_shih)
     
-    # Create 3 forces for the player
-    for i, position in enumerate(starting_positions, 1):
+    # Create forces for the player
+    for i, position in enumerate(starting_positions[:force_count], 1):
         force_id = f"{player_id}_f{i}"
         force = create_force(force_id, position)
         player.add_force(force)
@@ -115,6 +123,24 @@ def initialize_game(seed: int) -> GameState:
     Returns:
         New GameState instance ready for gameplay
     """
+    # Load config values with defaults
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    starting_chi = 100
+    starting_shih = 10
+    max_shih = 20
+    force_count = 3
+    
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            starting_chi = config.get('starting_chi', starting_chi)
+            starting_shih = config.get('starting_shih', starting_shih)
+            max_shih = config.get('max_shih', max_shih)
+            force_count = config.get('force_count', force_count)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Use defaults if config file is missing or invalid
+        pass
+    
     # Generate unique game ID
     game_id = str(uuid.uuid4())
     
@@ -123,12 +149,12 @@ def initialize_game(seed: int) -> GameState:
     
     # Create players with starting positions
     # P1 starts at (0,0) - top-left corner
-    p1_positions = [(0, 0), (1, 0), (0, 1)]
-    player1 = create_player('p1', p1_positions)
+    p1_positions = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2)]  # Support up to 6 forces
+    player1 = create_player('p1', p1_positions, starting_chi, starting_shih, force_count, max_shih)
     
     # P2 starts at (24,19) - bottom-right corner  
-    p2_positions = [(24, 19), (23, 19), (24, 18)]
-    player2 = create_player('p2', p2_positions)
+    p2_positions = [(24, 19), (23, 19), (24, 18), (23, 18), (22, 19), (24, 17)]  # Support up to 6 forces
+    player2 = create_player('p2', p2_positions, starting_chi, starting_shih, force_count, max_shih)
     
     # Create game state
     game_state = GameState(

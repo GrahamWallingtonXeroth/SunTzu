@@ -41,6 +41,7 @@ class Player:
     id: str  # Player identifier ('p1' or 'p2')
     chi: int = 100  # Chi resource (morale, starts at 100)
     shih: int = 10  # Shih resource (momentum, starts at 10, max 20)
+    max_shih: int = 20  # Maximum Shih value
     forces: List[Force] = field(default_factory=list)  # List of player's forces
 
     def add_force(self, force: Force) -> None:
@@ -54,9 +55,11 @@ class Player:
                 return force
         return None
 
-    def update_shih(self, amount: int) -> None:
-        """Update Shih resource, ensuring it stays within 0-20 range."""
-        self.shih = max(0, min(20, self.shih + amount))
+    def update_shih(self, amount: int, max_shih: Optional[int] = None) -> None:
+        """Update Shih resource, ensuring it stays within 0-max_shih range."""
+        if max_shih is None:
+            max_shih = self.max_shih
+        self.shih = max(0, min(max_shih, self.shih + amount))
 
     def update_chi(self, amount: int) -> None:
         """Update Chi resource, ensuring it doesn't go below 0."""
