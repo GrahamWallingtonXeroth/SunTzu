@@ -23,6 +23,7 @@ class Force:
     position: Tuple[int, int]  # Position as (q, r) axial coordinates
     stance: str = 'Mountain'  # Current stance: 'Mountain', 'River', 'Thunder'
     tendency: List[str] = field(default_factory=list)  # Last 3 orders for AI prediction
+    encircled_turns: int = 0  # Number of turns this force has been encircled
 
     def add_order_to_tendency(self, order: str) -> None:
         """Add an order to the tendency list, maintaining only last 3."""
