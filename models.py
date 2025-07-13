@@ -62,11 +62,4 @@ class Player:
         self.chi = max(0, self.chi + amount)
 
 
-@dataclass
-class GameState:
-    """High-level game state containing turn, phase, players, map, and ghosts."""
-    turn: int  # Current turn number
-    phase: str  # Current phase: 'plan', 'execute', or 'upkeep'
-    players: List[Player]  # List of players in the game
-    map: Dict[Tuple[int, int], Hex]  # Map of hex coordinates to Hex objects
-    ghosts: List[Tuple[Tuple[int, int], str]]  # List of (hex_coords, owner) for ghost forces
+
