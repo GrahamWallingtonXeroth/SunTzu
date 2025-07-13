@@ -119,17 +119,22 @@ def a_star_pathfinding(
 def generate_perlin_terrain(
     map_data: Dict[Tuple[int, int], Hex], 
     seed: int,
-    threshold: float = 0.6,
-    frequency: float = 10.0
+    target_coverage: float = 0.25,
+    frequency: float = 8.0,
+    max_attempts: int = 10
 ) -> Dict[Tuple[int, int], Hex]:
     """
-    Apply Perlin noise to generate Difficult Ground terrain.
+    Apply Perlin noise to generate Difficult Ground terrain with target coverage.
+    
+    Uses adaptive threshold adjustment to achieve 20-30% Difficult terrain coverage,
+    creating ridges and chokepoints for strategic gameplay.
     
     Args:
         map_data: Current map data
         seed: Random seed for noise generation
-        threshold: Noise threshold for Difficult Ground placement
-        frequency: Frequency of Perlin noise
+        target_coverage: Target percentage of Difficult terrain (0.2-0.3)
+        frequency: Frequency of Perlin noise (lower = more clustered)
+        max_attempts: Maximum attempts to adjust threshold
         
     Returns:
         Updated map data with Difficult Ground terrain
@@ -137,19 +142,58 @@ def generate_perlin_terrain(
     # Set random seed for noise
     random.seed(seed)
     
-    for q in range(25):
-        for r in range(20):
-            if (q, r) not in map_data:
-                continue
+    # Calculate target number of Difficult hexes
+    total_hexes = len(map_data)
+    target_difficult = int(total_hexes * target_coverage)
+    
+    # Try different thresholds to achieve target coverage
+    for attempt in range(max_attempts):
+        # Start with threshold that creates ridges (using abs() for clustering)
+        # Use more conservative threshold range for better control
+        threshold = 0.45 - (attempt * 0.03)  # Decrease threshold each attempt
+        
+        # Reset all hexes to Open (except Contentious)
+        for hex_obj in map_data.values():
+            if hex_obj.terrain != 'Contentious':
+                hex_obj.terrain = 'Open'
+        
+        # Apply Perlin noise with current threshold
+        for q in range(25):
+            for r in range(20):
+                if (q, r) not in map_data:
+                    continue
+                    
+                # Skip if already Contentious Ground
+                if map_data[(q, r)].terrain == 'Contentious':
+                    continue
                 
-            # Generate Perlin noise value
-            noise_val = pnoise2(q / frequency, r / frequency, octaves=1, 
-                              persistence=0.5, lacunarity=2.0, 
-                              repeatx=25, repeaty=20, base=seed)
-            
-            # Apply threshold to place Difficult Ground
-            if noise_val > threshold and map_data[(q, r)].terrain == 'Open':
-                map_data[(q, r)].terrain = 'Difficult'
+                # Generate Perlin noise value (range: [-1, 1])
+                noise_val = pnoise2(q / frequency, r / frequency, octaves=2, 
+                                  persistence=0.6, lacunarity=2.5, 
+                                  repeatx=25, repeaty=20, base=seed)
+                
+                # Use abs() to create ridges and clusters
+                # Place Difficult Ground where noise magnitude exceeds threshold
+                if abs(noise_val) > threshold:
+                    map_data[(q, r)].terrain = 'Difficult'
+        
+        # Check if we achieved target coverage
+        difficult_count = sum(1 for hex_obj in map_data.values() 
+                            if hex_obj.terrain == 'Difficult')
+        current_coverage = difficult_count / total_hexes
+        
+        # Accept if within 20-30% range
+        if 0.2 <= current_coverage <= 0.3:
+            print(f"Perlin terrain generated: {difficult_count} Difficult hexes "
+                  f"({current_coverage:.1%} coverage) with threshold {threshold:.2f}")
+            return map_data
+    
+    # If we couldn't achieve target coverage, return with current result
+    difficult_count = sum(1 for hex_obj in map_data.values() 
+                         if hex_obj.terrain == 'Difficult')
+    current_coverage = difficult_count / total_hexes
+    print(f"Warning: Could not achieve target coverage. "
+          f"Generated {difficult_count} Difficult hexes ({current_coverage:.1%} coverage)")
     
     return map_data
 
@@ -297,7 +341,7 @@ def generate_map(seed: int) -> Dict[Tuple[int, int], Hex]:
                     map_data[(q, r)].terrain = 'Open'  # Ensure path is Open
     
     # Step 4: Add barriers using Perlin noise
-    map_data = generate_perlin_terrain(map_data, seed, threshold=0.3, frequency=8.0)
+    map_data = generate_perlin_terrain(map_data, seed, target_coverage=0.25, frequency=8.0)
     
     # Step 5: Validate balance and regenerate if necessary
     max_attempts = 10
@@ -359,7 +403,7 @@ def generate_map(seed: int) -> Dict[Tuple[int, int], Hex]:
                             map_data[(q, r)].terrain = 'Open'
             
             # Regenerate Perlin terrain
-            map_data = generate_perlin_terrain(map_data, new_seed, threshold=0.3, frequency=8.0)
+            map_data = generate_perlin_terrain(map_data, new_seed, target_coverage=0.25, frequency=8.0)
     
     # If we couldn't generate a balanced map, return the last attempt
     return map_data
@@ -367,7 +411,7 @@ def generate_map(seed: int) -> Dict[Tuple[int, int], Hex]:
 
 def print_map_stats(map_data: Dict[Tuple[int, int], Hex]) -> None:
     """
-    Print statistics about the generated map.
+    Print detailed statistics about the generated map.
     
     Args:
         map_data: Generated map data
@@ -376,15 +420,71 @@ def print_map_stats(map_data: Dict[Tuple[int, int], Hex]) -> None:
     for hex_obj in map_data.values():
         terrain_counts[hex_obj.terrain] = terrain_counts.get(hex_obj.terrain, 0) + 1
     
-    print("Map Statistics:")
+    print("\n" + "="*50)
+    print("MAP STATISTICS")
+    print("="*50)
     print(f"Total hexes: {len(map_data)}")
+    print(f"Map size: 25x20 hexes")
+    print("-"*30)
+    
     for terrain, count in terrain_counts.items():
         percentage = (count / len(map_data)) * 100
-        print(f"{terrain}: {count} ({percentage:.1f}%)")
+        print(f"{terrain:12}: {count:3d} hexes ({percentage:5.1f}%)")
+    
+    # Check coverage requirements
+    difficult_count = terrain_counts.get('Difficult', 0)
+    difficult_coverage = difficult_count / len(map_data)
+    
+    print("-"*30)
+    if 0.2 <= difficult_coverage <= 0.3:
+        print(f"✓ Difficult terrain coverage: {difficult_coverage:.1%} (within 20-30% target)")
+    else:
+        print(f"✗ Difficult terrain coverage: {difficult_coverage:.1%} (outside 20-30% target)")
+    
+    print("="*50)
+
+
+def test_perlin_terrain_generation() -> None:
+    """
+    Test function for Perlin terrain generation with different seeds.
+    """
+    print("Testing Perlin terrain generation...")
+    print("="*50)
+    
+    # Test with different seeds
+    test_seeds = [42, 123, 456, 789, 999]
+    
+    for seed in test_seeds:
+        print(f"\nTesting seed: {seed}")
+        print("-"*30)
+        
+        # Create a simple test map
+        test_map = {}
+        for q in range(25):
+            for r in range(20):
+                test_map[(q, r)] = Hex(q=q, r=r, terrain='Open')
+        
+        # Add some Contentious Ground in center
+        center_hexes = [(12, 10), (13, 10), (12, 11)]
+        for q, r in center_hexes:
+            test_map[(q, r)].terrain = 'Contentious'
+        
+        # Generate Perlin terrain
+        result_map = generate_perlin_terrain(test_map, seed, target_coverage=0.25)
+        
+        # Print statistics
+        print_map_stats(result_map)
 
 
 if __name__ == "__main__":
-    # Example usage
+    # Test Perlin terrain generation
+    test_perlin_terrain_generation()
+    
+    print("\n" + "="*50)
+    print("FULL MAP GENERATION TEST")
+    print("="*50)
+    
+    # Example usage of full map generation
     seed = 42
     map_data = generate_map(seed)
     print_map_stats(map_data)
