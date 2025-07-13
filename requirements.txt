@@ -23,7 +23,7 @@ Pygments==2.17.2                # Syntax highlighting package (used by Flask deb
 # Utility packages
 packaging==24.0                  # Core utilities for Python packages
 pluggy==1.4.0                   # Plugin and hook calling mechanisms for Python
-iniconfig==3.0.0                # INI file parser (pytest dependency)
+iniconfig==2.0.0                # INI file parser (pytest dependency) - fixed invalid version
 
 # Google Cloud Platform specific considerations:
 # - All packages are compatible with Python 3.12 runtime
@@ -32,3 +32,4 @@ iniconfig==3.0.0                # INI file parser (pytest dependency)
 # - Flask 3.0.2 is the latest stable version with full Python 3.12 support
 # - numpy 2.0.0 is optimized for Python 3.12 and modern architectures
 # - All dependencies are pure Python or have pre-compiled wheels for App Engine
+# - iniconfig 2.0.0 is the latest valid version compatible with Python 3.12
