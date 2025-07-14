@@ -34,11 +34,12 @@ def test_initialize_game_basic():
     
     # Check force positions for Player 2
     p2_positions = [f.position for f in p2.forces]
-    expected_p2_positions = [(24, 19), (23, 19), (24, 18)]
+    expected_p2_positions = [(9, 9), (8, 9), (9, 8)]
     assert sorted(p2_positions) == sorted(expected_p2_positions), "Player 2 forces at wrong positions"
+
 
 def test_initialize_game_map():
     """Test that the map is initialized in the game state."""
     game_state = initialize_game(seed=42)
     assert game_state.map_data is not None, "Map should not be None"
-    assert len(game_state.map_data) == 25 * 20, "Map should have 500 hexes (25x20)"
+    assert len(game_state.map_data) == 10 * 10, "Map should have 100 hexes (10x10)"

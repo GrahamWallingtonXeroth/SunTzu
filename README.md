@@ -5,6 +5,14 @@ This repository contains the fully implemented backend API for "Sun Tzu: The Unf
 
 ## Key Features Implemented
 
+Key Features:
+- Procedural hex grid map generation (10x10 hexes with Open, Difficult, Contentious terrains).
+- Player resources: Chi (morale), Shih (momentum).
+- Orders: Advance, Meditate, Deceive (with ghosts).
+- Confrontations: Rock-paper-scissors stances (Mountain, River, Thunder).
+- Victory paths: Demoralization, Domination, Deception Mastery.
+- API endpoints for game creation, state, actions, logs.
+=======
 ### Core Game Systems
 - **Procedural Map Generation**: 25x20 hex grid with balanced terrain placement using Perlin noise
 - **Three Terrain Types**: Open (standard), Difficult (defensive advantage), Contentious (strategic objectives)

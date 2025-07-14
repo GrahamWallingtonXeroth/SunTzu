@@ -48,7 +48,7 @@ def test_get_game_state(client):
     assert data['turn'] == 1
     assert data['phase'] == 'plan'
     assert len(data['players']) == 2
-    assert len(data['map']) == 25 * 20  # 500 hexes
+    assert len(data['map']) == 10 * 10  # 100 hexes
     
     # Verify player data
     p1 = data['players'][0]
@@ -63,7 +63,7 @@ def test_get_game_state(client):
     assert p2['chi'] == 100
     assert p2['shih'] == 10
     assert len(p2['forces']) == 3
-    assert sorted([(f['position']['q'], f['position']['r']) for f in p2['forces']]) == [(23, 19), (24, 18), (24, 19)]
+    assert sorted([(f['position']['q'], f['position']['r']) for f in p2['forces']]) == [(8, 9), (9, 8), (9, 9)]
 
 def test_valid_advance_order(client, sample_game_state):
     """Test valid Advance order without confrontation - check state update and Shih deduction."""

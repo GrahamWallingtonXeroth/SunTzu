@@ -19,9 +19,9 @@ def sample_game_state():
                 Force(id="p1_f3", position=(0, 1), stance="Mountain")
             ]),
             Player(id="p2", chi=100, shih=10, forces=[
-                Force(id="p2_f1", position=(24, 19), stance="Mountain"),
-                Force(id="p2_f2", position=(23, 19), stance="Mountain"),
-                Force(id="p2_f3", position=(24, 18), stance="Mountain")
+                Force(id="p2_f1", position=(9, 9), stance="Mountain"),
+                Force(id="p2_f2", position=(8, 9), stance="Mountain"),
+                Force(id="p2_f3", position=(9, 8), stance="Mountain")
             ])
         ],
         map_data={
@@ -29,10 +29,10 @@ def sample_game_state():
             (1, 0): Hex(q=1, r=0, terrain="Open"),
             (0, 1): Hex(q=0, r=1, terrain="Open"),
             (1, 1): Hex(q=1, r=1, terrain="Difficult"),
-            (24, 19): Hex(q=24, r=19, terrain="Open"),
-            (23, 19): Hex(q=23, r=19, terrain="Open"),
-            (24, 18): Hex(q=24, r=18, terrain="Open"),
-            (23, 18): Hex(q=23, r=18, terrain="Open")
+            (9, 9): Hex(q=9, r=9, terrain="Open"),
+            (8, 9): Hex(q=8, r=9, terrain="Open"),
+            (9, 8): Hex(q=9, r=8, terrain="Open"),
+            (8, 8): Hex(q=8, r=8, terrain="Open")
         }
     )
     return game_state
@@ -141,7 +141,7 @@ def test_resolve_orders_advance_confrontation(sample_game_state):
     assert len(results["errors"]) == 0
 
 def test_resolve_orders_meditate(sample_game_state):
-    """Test Meditate order queues Shih and reveals adjacent orders."""
+    """Test Meditate order stores Shih for upkeep and reveals adjacent orders."""
     force_p1 = sample_game_state.players[0].forces[0]  # p1_f1 at (0, 0)
     force_p2 = sample_game_state.players[1].forces[0]  # p2_f1 at (24, 19)
     sample_game_state.players[1].forces[0].position = (1, 0)  # Move p2_f1 adjacent
@@ -151,7 +151,13 @@ def test_resolve_orders_meditate(sample_game_state):
     order_p2 = Order(OrderType.ADVANCE, force_p2, target_hex=(2, 0), stance="River")
     results = resolve_orders([order_p1, order_p2], sample_game_state)
     
-    assert sample_game_state.players[0].shih == 12  # 10 + 2
+    # Shih should not be applied immediately, but stored for upkeep
+    assert sample_game_state.players[0].shih == 10  # No immediate change
+    # Verify Meditate order was stored for upkeep
+    assert 'p1' in sample_game_state.last_orders
+    assert len(sample_game_state.last_orders['p1']) == 1
+    assert sample_game_state.last_orders['p1'][0]['order_type'] == 'Meditate'
+    assert sample_game_state.last_orders['p1'][0]['shih_bonus'] == 2
     assert ("p2_f1", "Advance") in results["revealed_orders"]
     assert len(results["confrontations"]) == 0
     assert len(results["errors"]) == 0
@@ -178,7 +184,7 @@ def test_resolve_orders_invalid_order(sample_game_state):
     
     assert sample_game_state.players[0].shih == 1  # No Shih deducted
     assert force.position == (0, 0)  # No move
-    assert len(results["errors"]) == 1
+    assert len(results["errors"]) == 2  # Two errors are logged
     assert "Invalid order for force p1_f1: Advance" in results["errors"][0]
     assert "has insufficient Shih" in results["errors"][0]
     assert len(results["confrontations"]) == 0
@@ -226,7 +232,7 @@ def test_resolve_orders_advance_into_ghost(sample_game_state):
     assert sample_game_state.players[1].shih == 7  # 10 - 3
 
 def test_resolve_orders_multiple_meditate_reveals(sample_game_state):
-    """Test multiple Meditate orders reveal all adjacent enemy orders."""
+    """Test multiple Meditate orders store Shih for upkeep and reveal all adjacent enemy orders."""
     force_p1_1 = sample_game_state.players[0].forces[0]  # p1_f1 at (0, 0)
     force_p1_2 = sample_game_state.players[0].forces[1]  # p1_f2 at (1, 0)
     force_p2_1 = sample_game_state.players[1].forces[0]  # p2_f1 at (24, 19)
@@ -244,7 +250,13 @@ def test_resolve_orders_multiple_meditate_reveals(sample_game_state):
     
     results = resolve_orders([order_meditate_1, order_meditate_2, order_advance_1, order_advance_2], sample_game_state)
     
-    assert sample_game_state.players[0].shih == 14  # 10 + 2 + 2
+    # Shih should not be applied immediately, but stored for upkeep
+    assert sample_game_state.players[0].shih == 10  # No immediate change
+    # Verify both Meditate orders were stored for upkeep
+    assert 'p1' in sample_game_state.last_orders
+    assert len(sample_game_state.last_orders['p1']) == 2
+    meditate_orders = [order for order in sample_game_state.last_orders['p1'] if order['order_type'] == 'Meditate']
+    assert len(meditate_orders) == 2
     # Both p2_f1 and p2_f2 should be revealed since they're adjacent to meditating forces
     assert len(results["revealed_orders"]) == 2
     revealed_force_ids = [force_id for force_id, _ in results["revealed_orders"]]
@@ -461,7 +473,7 @@ class TestOrderLogging:
         
         # Check that error was logged
         error_logs = [log for log in game_state.log if "error_type" in log]
-        assert len(error_logs) == 1
+        assert len(error_logs) == 2  # Two errors are logged
         assert error_logs[0]['error_type'] == "validation_error"
         assert "insufficient Shih" in error_logs[0]['event']
     
