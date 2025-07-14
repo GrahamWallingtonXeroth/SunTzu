@@ -16,11 +16,11 @@ This file extracts key sections from the Game Design Document (GDD) PDF for quic
 Control: Occupied by friendly force with no adjacent enemies.
 
 ## 3. Map Generation
-- Grid: 25x20 hexes, axial coords (q, r).
+- Grid: 10x10 hexes, axial coords (q, r).
 - Algorithm:
   1. Seed RNG.
-  2. Player starts: P1 at (0,0), P2 at (24,19) on Open.
-  3. 3-5 Contentious hexes near center (q=10-15, r=8-12).
+  2. Player starts: P1 at (0,0), P2 at (9,9) on Open.
+  3. 3-5 Contentious hexes near center (q=4-6, r=4-6).
   4. Paths: A* connect starts to center with Open (min 5 hexes/path).
   5. Barriers: Perlin noise (threshold 0.6) for Difficult (20-30% coverage, 2+ chokepoints/path).
   6. Balance: Symmetric access (±2 hexes); regenerate if not.

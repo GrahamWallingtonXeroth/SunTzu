@@ -43,12 +43,12 @@ def hex_distance(q1: int, r1: int, q2: int, r2: int) -> int:
 
 def is_valid_hex(q: int, r: int, max_q: int = 10, max_r: int = 10) -> bool:
     """
-    Check if hex coordinates are within valid bounds.
+    Check if hex coordinates are within valid bounds (10x10 map).
     
     Args:
         q, r: Hex coordinates
-        max_q: Maximum q coordinate (exclusive)
-        max_r: Maximum r coordinate (exclusive)
+        max_q: Maximum q coordinate (exclusive, default 10)
+        max_r: Maximum r coordinate (exclusive, default 10)
         
     Returns:
         True if coordinates are valid

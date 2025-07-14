@@ -6,7 +6,7 @@ This repository contains the backend API for "Sun Tzu: The Unfought Battle," a t
 Based on the Game Design Document (GDD) in `docs/TheUnfoughtBattle.pdf`.
 
 Key Features:
-- Procedural hex grid map generation (25x20 hexes with Open, Difficult, Contentious terrains).
+- Procedural hex grid map generation (10x10 hexes with Open, Difficult, Contentious terrains).
 - Player resources: Chi (morale), Shih (momentum).
 - Orders: Advance, Meditate, Deceive (with ghosts).
 - Confrontations: Rock-paper-scissors stances (Mountain, River, Thunder).

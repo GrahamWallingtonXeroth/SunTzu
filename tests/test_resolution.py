@@ -48,26 +48,26 @@ class TestConfrontationResolution:
             players=[
                 Player(id="p1", chi=100, shih=10, forces=[
                     Force(id="p1_f1", position=(0, 0), stance="Mountain"),  # Corner
-                    Force(id="p1_f2", position=(24, 0), stance="River"),    # Top-right corner
+                    Force(id="p1_f2", position=(9, 0), stance="River"),    # Top-right corner
                 ]),
                 Player(id="p2", chi=100, shih=10, forces=[
-                    Force(id="p2_f1", position=(0, 19), stance="Thunder"),  # Bottom-left corner
-                    Force(id="p2_f2", position=(24, 19), stance="Mountain"), # Bottom-right corner
+                    Force(id="p2_f1", position=(0, 9), stance="Thunder"),  # Bottom-left corner
+                    Force(id="p2_f2", position=(9, 9), stance="Mountain"), # Bottom-right corner
                 ])
             ],
             map_data={
                 (0, 0): Hex(q=0, r=0, terrain="Open"),
                 (1, 0): Hex(q=1, r=0, terrain="Open"),
                 (0, 1): Hex(q=0, r=1, terrain="Open"),
-                (24, 0): Hex(q=24, r=0, terrain="Open"),
-                (23, 0): Hex(q=23, r=0, terrain="Open"),
-                (24, 1): Hex(q=24, r=1, terrain="Open"),
-                (0, 19): Hex(q=0, r=19, terrain="Open"),
-                (1, 19): Hex(q=1, r=19, terrain="Open"),
-                (0, 18): Hex(q=0, r=18, terrain="Open"),
-                (24, 19): Hex(q=24, r=19, terrain="Open"),
-                (23, 19): Hex(q=23, r=19, terrain="Open"),
-                (24, 18): Hex(q=24, r=18, terrain="Open"),
+                (9, 0): Hex(q=9, r=0, terrain="Open"),
+                (8, 0): Hex(q=8, r=0, terrain="Open"),
+                (9, 1): Hex(q=9, r=1, terrain="Open"),
+                (0, 9): Hex(q=0, r=9, terrain="Open"),
+                (1, 9): Hex(q=1, r=9, terrain="Open"),
+                (0, 8): Hex(q=0, r=8, terrain="Open"),
+                (9, 9): Hex(q=9, r=9, terrain="Open"),
+                (8, 9): Hex(q=8, r=9, terrain="Open"),
+                (9, 8): Hex(q=9, r=8, terrain="Open"),
             }
         )
         return game_state
@@ -241,12 +241,12 @@ class TestConfrontationResolution:
     def test_retreat_from_corner(self, corner_game_state):
         """Test retreat from map corner positions."""
         # Test each corner
-        corners = [(0, 0), (24, 0), (0, 19), (24, 19)]
+        corners = [(0, 0), (9, 0), (0, 9), (9, 9)]
         expected_retreats = {
             (0, 0): [(1, 0), (0, 1)],
-            (24, 0): [(23, 0), (24, 1)],
-            (0, 19): [(1, 19), (0, 18)],
-            (24, 19): [(23, 19), (24, 18)]
+            (9, 0): [(8, 0), (9, 1)],
+            (0, 9): [(1, 9), (0, 8)],
+            (9, 9): [(8, 9), (9, 8)]
         }
         
         for corner in corners:
@@ -272,8 +272,8 @@ class TestConfrontationResolution:
         
         if retreat_hex is not None:
             # Verify hex is within bounds
-            assert 0 <= retreat_hex[0] < 25
-            assert 0 <= retreat_hex[1] < 20
+            assert 0 <= retreat_hex[0] < 10
+            assert 0 <= retreat_hex[1] < 10
             
             # Verify hex exists in map data
             assert retreat_hex in basic_game_state.map_data

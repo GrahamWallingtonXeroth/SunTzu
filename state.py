@@ -4,7 +4,7 @@ Implements game state, player management, and force tracking based on GDD v0.7.
 
 Resources: Chi (morale, starts 100), Shih (momentum, starts 10, max 20)
 Forces: 3 per player with positions, stances, and order tendencies
-Map: 25x20 hexes with axial coordinate system
+Map: 10x10 hexes with axial coordinate system
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ class GameState:
     Complete game state containing all game information.
     
     Based on GDD: Game progresses through turns and phases (plan/execute/upkeep),
-    with players managing forces on a 25x20 hex map.
+    with players managing forces on a 10x10 hex map.
     """
     game_id: str  # Unique game identifier
     turn: int = 1  # Current turn number (starts at 1)
@@ -60,9 +60,9 @@ class GameState:
             self.turn += 1
     
     def is_valid_position(self, position: Tuple[int, int]) -> bool:
-        """Check if a position is within the valid map bounds (25x20)."""
+        """Check if a position is within the valid map bounds (10x10)."""
         q, r = position
-        return 0 <= q < 25 and 0 <= r < 20
+        return 0 <= q < 10 and 0 <= r < 10
 
 
 def create_force(force_id: str, position: Tuple[int, int], stance: str = 'Mountain') -> Force:
@@ -118,7 +118,7 @@ def initialize_game(seed: int) -> GameState:
     Initialize a new game state with two players and generated map.
     
     Based on GDD: Players start at opposite corners with 3 forces each.
-    P1 starts at (0,0), P2 starts at (24,19) - opposite corners of 25x20 map.
+    P1 starts at (0,0), P2 starts at (9,9) - opposite corners of 10x10 map.
     
     Args:
         seed: Random seed for map generation (required)
@@ -204,5 +204,5 @@ def get_game_summary(game_state: GameState) -> Dict:
             }
             for player in game_state.players
         ],
-        'map_size': (25, 20)
+        'map_size': (10, 10)
     }

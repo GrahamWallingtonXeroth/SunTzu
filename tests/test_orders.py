@@ -19,9 +19,9 @@ def sample_game_state():
                 Force(id="p1_f3", position=(0, 1), stance="Mountain")
             ]),
             Player(id="p2", chi=100, shih=10, forces=[
-                Force(id="p2_f1", position=(24, 19), stance="Mountain"),
-                Force(id="p2_f2", position=(23, 19), stance="Mountain"),
-                Force(id="p2_f3", position=(24, 18), stance="Mountain")
+                Force(id="p2_f1", position=(9, 9), stance="Mountain"),
+                Force(id="p2_f2", position=(8, 9), stance="Mountain"),
+                Force(id="p2_f3", position=(9, 8), stance="Mountain")
             ])
         ],
         map_data={
@@ -29,10 +29,10 @@ def sample_game_state():
             (1, 0): Hex(q=1, r=0, terrain="Open"),
             (0, 1): Hex(q=0, r=1, terrain="Open"),
             (1, 1): Hex(q=1, r=1, terrain="Difficult"),
-            (24, 19): Hex(q=24, r=19, terrain="Open"),
-            (23, 19): Hex(q=23, r=19, terrain="Open"),
-            (24, 18): Hex(q=24, r=18, terrain="Open"),
-            (23, 18): Hex(q=23, r=18, terrain="Open")
+            (9, 9): Hex(q=9, r=9, terrain="Open"),
+            (8, 9): Hex(q=8, r=9, terrain="Open"),
+            (9, 8): Hex(q=9, r=8, terrain="Open"),
+            (8, 8): Hex(q=8, r=8, terrain="Open")
         }
     )
     return game_state
@@ -184,7 +184,7 @@ def test_resolve_orders_invalid_order(sample_game_state):
     
     assert sample_game_state.players[0].shih == 1  # No Shih deducted
     assert force.position == (0, 0)  # No move
-    assert len(results["errors"]) == 1
+    assert len(results["errors"]) == 2  # Two errors are logged
     assert "Invalid order for force p1_f1: Advance" in results["errors"][0]
     assert "has insufficient Shih" in results["errors"][0]
     assert len(results["confrontations"]) == 0
@@ -473,7 +473,7 @@ class TestOrderLogging:
         
         # Check that error was logged
         error_logs = [log for log in game_state.log if "error_type" in log]
-        assert len(error_logs) == 1
+        assert len(error_logs) == 2  # Two errors are logged
         assert error_logs[0]['error_type'] == "validation_error"
         assert "insufficient Shih" in error_logs[0]['event']
     

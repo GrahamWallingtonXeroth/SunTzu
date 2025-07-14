@@ -6,6 +6,7 @@ Simple test script to verify confrontation dynamics work.
 import requests
 import json
 import time
+import pytest
 from typing import Dict, List, Any, Optional, Tuple
 
 
@@ -278,6 +279,12 @@ class ConfrontationTester:
                                     'target_hex': {'q': best_adjacent[0], 'r': best_adjacent[1]},
                                     'stance': 'River'
                                 })
+                    else:
+                        # Meditate to build Shih if we don't have enough
+                        p1_orders.append({
+                            'force_id': 'p1_f2',
+                            'order': 'Meditate'
+                        })
                 else:
                     # Meditate to build Shih - be more aggressive about this
                     p1_orders.append({
@@ -307,6 +314,12 @@ class ConfrontationTester:
                                     'target_hex': {'q': best_adjacent[0], 'r': best_adjacent[1]},
                                     'stance': 'Mountain'
                                 })
+                    else:
+                        # Meditate to build Shih if we don't have enough
+                        p2_orders.append({
+                            'force_id': 'p2_f2',
+                            'order': 'Meditate'
+                        })
                 else:
                     # Meditate to build Shih - be more aggressive about this
                     p2_orders.append({
@@ -454,6 +467,20 @@ class ConfrontationTester:
             if log:
                 print(f"Log events: {log}")
             return False
+
+
+def test_confrontation_dynamics():
+    """Test that confrontation dynamics work correctly."""
+    print("Confrontation Dynamics Test")
+    print("=" * 40)
+    
+    tester = ConfrontationTester()
+    
+    # Run the confrontation test
+    result = tester.test_confrontation()
+    
+    # Assert that the test passed
+    assert result, "Confrontation dynamics test failed!"
 
 
 def main():
