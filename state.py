@@ -155,8 +155,8 @@ def initialize_game(seed: int) -> GameState:
     p1_positions = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2)]  # Support up to 6 forces
     player1 = create_player('p1', p1_positions, starting_chi, starting_shih, force_count, max_shih)
     
-    # P2 starts at (24,19) - bottom-right corner  
-    p2_positions = [(24, 19), (23, 19), (24, 18), (23, 18), (22, 19), (24, 17)]  # Support up to 6 forces
+    # P2 starts at (9,9) - bottom-right corner of 10x10 map
+    p2_positions = [(9, 9), (8, 9), (9, 8), (8, 8), (7, 9), (9, 7)]  # Support up to 6 forces
     player2 = create_player('p2', p2_positions, starting_chi, starting_shih, force_count, max_shih)
     
     # Create game state

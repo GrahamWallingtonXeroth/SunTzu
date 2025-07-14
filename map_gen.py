@@ -41,7 +41,7 @@ def hex_distance(q1: int, r1: int, q2: int, r2: int) -> int:
     return max(abs(q1 - q2), abs(r1 - r2), abs(-(q1 + r1) + (q2 + r2)))
 
 
-def is_valid_hex(q: int, r: int, max_q: int = 25, max_r: int = 20) -> bool:
+def is_valid_hex(q: int, r: int, max_q: int = 10, max_r: int = 10) -> bool:
     """
     Check if hex coordinates are within valid bounds.
     
@@ -120,7 +120,7 @@ def generate_perlin_terrain(
     map_data: Dict[Tuple[int, int], Hex], 
     seed: int,
     target_coverage: float = 0.25,
-    frequency: float = 8.0,
+    frequency: float = 4.0,  # Reduced frequency for smaller map
     max_attempts: int = 10
 ) -> Dict[Tuple[int, int], Hex]:
     """
@@ -158,8 +158,8 @@ def generate_perlin_terrain(
                 hex_obj.terrain = 'Open'
         
         # Apply Perlin noise with current threshold
-        for q in range(25):
-            for r in range(20):
+        for q in range(10):
+            for r in range(10):
                 if (q, r) not in map_data:
                     continue
                     
@@ -170,7 +170,7 @@ def generate_perlin_terrain(
                 # Generate Perlin noise value (range: [-1, 1])
                 noise_val = pnoise2(q / frequency, r / frequency, octaves=2, 
                                   persistence=0.6, lacunarity=2.5, 
-                                  repeatx=25, repeaty=20, base=seed)
+                                  repeatx=10, repeaty=10, base=seed)
                 
                 # Use abs() to create ridges and clusters
                 # Place Difficult Ground where noise magnitude exceeds threshold
@@ -294,20 +294,20 @@ def generate_map(seed: int) -> Dict[Tuple[int, int], Hex]:
     
     # Initialize map with all Open Ground
     map_data = {}
-    for q in range(25):
-        for r in range(20):
+    for q in range(10):
+        for r in range(10):
             map_data[(q, r)] = Hex(q=q, r=r, terrain='Open')
     
     # Step 1: Place starting positions
     p1_start = (0, 0)
-    p2_start = (24, 19)
+    p2_start = (9, 9)
     
     map_data[p1_start].terrain = 'Open'  # Player 1 starting position
     map_data[p2_start].terrain = 'Open'  # Player 2 starting position
     
     # Step 2: Generate Contentious Ground in center cluster
-    center_q_range = range(10, 16)  # q=10-15
-    center_r_range = range(8, 13)   # r=8-12
+    center_q_range = range(4, 7)    # q=4-6 (center of 10x10 map)
+    center_r_range = range(4, 7)    # r=4-6 (center of 10x10 map)
     
     center_hexes = []
     num_contentious = random.randint(3, 5)
@@ -366,8 +366,8 @@ def generate_map(seed: int) -> Dict[Tuple[int, int], Hex]:
             
             # Reset map and try again
             map_data = {}
-            for q in range(25):
-                for r in range(20):
+            for q in range(10):
+                for r in range(10):
                     map_data[(q, r)] = Hex(q=q, r=r, terrain='Open')
             
             # Reapply all steps with new seed
@@ -424,7 +424,7 @@ def print_map_stats(map_data: Dict[Tuple[int, int], Hex]) -> None:
     print("MAP STATISTICS")
     print("="*50)
     print(f"Total hexes: {len(map_data)}")
-    print(f"Map size: 25x20 hexes")
+    print(f"Map size: 10x10 hexes")
     print("-"*30)
     
     for terrain, count in terrain_counts.items():
@@ -460,12 +460,12 @@ def test_perlin_terrain_generation() -> None:
         
         # Create a simple test map
         test_map = {}
-        for q in range(25):
-            for r in range(20):
+        for q in range(10):
+            for r in range(10):
                 test_map[(q, r)] = Hex(q=q, r=r, terrain='Open')
         
         # Add some Contentious Ground in center
-        center_hexes = [(12, 10), (13, 10), (12, 11)]
+        center_hexes = [(5, 5), (4, 5), (5, 4)]
         for q, r in center_hexes:
             test_map[(q, r)].terrain = 'Contentious'
         

@@ -51,7 +51,7 @@ class TestHexUtilities:
         # Diagonal distance (in axial coordinates, this is the max of the differences)
         # For (5,5) to (7,7): max(2, 2, abs(-10+14)) = max(2, 2, 4) = 4
         assert hex_distance(5, 5, 7, 7) == 4
-        assert hex_distance(0, 0, 10, 10) == 20
+        assert hex_distance(0, 0, 10, 10) == 20  # This is still correct for distance calculation
     
     def test_is_valid_hex(self) -> None:
         """Test hex coordinate validation within map bounds."""
@@ -144,8 +144,8 @@ class TestTerrainGeneration:
         """Test that Difficult terrain coverage is 20-30% for seed=42."""
         # Create base map data
         map_data = {}
-        for q in range(25):
-            for r in range(20):
+        for q in range(10):
+            for r in range(10):
                 map_data[(q, r)] = Hex(q, r, 'Open')
         
         # Generate terrain with seed 42
@@ -166,7 +166,7 @@ class TestTerrainGeneration:
         # Create base map data
         map_data1 = {}
         map_data2 = {}
-        for q in range(10):  # Smaller map for faster testing
+        for q in range(10):  # 10x10 map
             for r in range(10):
                 map_data1[(q, r)] = Hex(q, r, 'Open')
                 map_data2[(q, r)] = Hex(q, r, 'Open')
@@ -283,14 +283,14 @@ class TestFullMapGeneration:
         """Test full map generation with seed 42 meets GDD requirements."""
         map_data = generate_map(seed=42)
         
-        # Test map size (25x20 hexes)
-        assert len(map_data) == 25 * 20
+        # Test map size (10x10 hexes)
+        assert len(map_data) == 10 * 10
         
         # Test player starting positions exist and are Open
         assert (0, 0) in map_data
         assert map_data[(0, 0)].terrain == 'Open'  # P1 start
-        assert (24, 19) in map_data
-        assert map_data[(24, 19)].terrain == 'Open'  # P2 start
+        assert (9, 9) in map_data
+        assert map_data[(9, 9)].terrain == 'Open'  # P2 start
         
         # Test Difficult terrain coverage (20-30%)
         difficult_count = sum(1 for hex_obj in map_data.values() 
@@ -303,17 +303,17 @@ class TestFullMapGeneration:
                            if hex_obj.terrain == 'Contentious']
         assert 3 <= len(contentious_hexes) <= 5
         
-        # Test Contentious hexes are near center (q=10-15, r=8-12)
+        # Test Contentious hexes are near center (q=4-6, r=4-6)
         for q, r in contentious_hexes:
-            assert 10 <= q <= 15
-            assert 8 <= r <= 12
+            assert 4 <= q <= 6
+            assert 4 <= r <= 6
     
     def test_generate_map_pathfinding_requirements(self) -> None:
         """Test that generated maps have valid paths meeting GDD requirements."""
         map_data = generate_map(seed=42)
         
         p1_start = (0, 0)
-        p2_start = (24, 19)
+        p2_start = (9, 9)
         
         # Find Contentious hexes (center objectives)
         contentious_hexes = [(q, r) for (q, r), hex_obj in map_data.items() 
@@ -336,7 +336,7 @@ class TestFullMapGeneration:
         map_data = generate_map(seed=42)
         
         p1_start = (0, 0)
-        p2_start = (24, 19)
+        p2_start = (9, 9)
         
         # Find Contentious hexes
         contentious_hexes = [(q, r) for (q, r), hex_obj in map_data.items() 
