@@ -25,6 +25,7 @@ Pygments==2.17.2                # Syntax highlighting package (used by Flask deb
 packaging==24.0                  # Core utilities for Python packages
 pluggy==1.4.0                   # Plugin and hook calling mechanisms for Python
 iniconfig==2.0.0                # INI file parser (pytest dependency) - fixed invalid version
+requests==2.31.0                # HTTP library for making API calls in simulation script
 
 # Google Cloud Platform specific considerations:
 # - All packages are compatible with Python 3.12 runtime
