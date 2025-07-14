@@ -133,8 +133,37 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
     # Log order resolution start
     log_event(game_state, f"Order resolution phase started with {len(orders)} orders")
     
-    # Process orders one at a time to ensure proper Shih validation
+    # First pass: collect all Advance orders and group by target hex to detect conflicts
+    advance_orders_by_target = {}  # target_hex -> list of (order, player)
+    advance_orders = []  # orders that are not Advance
+    advance_conflicts = []  # list of confrontation groups
+    
     for order in orders:
+        if order.order_type == OrderType.ADVANCE:
+            target_hex = order.target_hex
+            if target_hex not in advance_orders_by_target:
+                advance_orders_by_target[target_hex] = []
+            player = next(p for p in game_state.players if order.force in p.forces)
+            advance_orders_by_target[target_hex].append((order, player))
+        else:
+            advance_orders.append(order)
+    
+    # Detect conflicts: multiple forces from different players targeting same hex
+    for target_hex, order_list in advance_orders_by_target.items():
+        if len(order_list) > 1:
+            # Check if forces are from different players
+            players_involved = set(player.id for _, player in order_list)
+            if len(players_involved) > 1:
+                # Conflict detected - create confrontation group
+                advance_conflicts.append((target_hex, order_list))
+                log_event(game_state, f"Conflict detected: {len(order_list)} forces targeting {target_hex}")
+                continue
+        
+        # No conflict, process normally
+        advance_orders.extend([order for order, _ in order_list])
+    
+    # Process non-Advance orders first
+    for order in advance_orders:
         try:
             # Find the player that owns this force
             player = next(p for p in game_state.players if order.force in p.forces)
@@ -200,7 +229,31 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                     log_event(game_state, f"Player {player.id} spent 3 Shih on deception")
                     log_event(game_state, f"Force {order.force.id} created ghost at {target_hex}")
                 
-                elif order.order_type == OrderType.ADVANCE:
+        except OrderValidationError as e:
+            error_msg = f"Invalid order for force {order.force.id}: {order.order_type.value} - {str(e)}"
+            results["errors"].append(error_msg)
+            log_event(game_state, error_msg, error_type="validation_error")
+        except Exception as e:
+            error_msg = f"Unexpected error processing order for force {order.force.id}: {str(e)}"
+            results["errors"].append(error_msg)
+            log_event(game_state, error_msg, error_type="processing_error")
+    
+    # Process non-conflicting Advance orders
+    for target_hex, order_list in advance_orders_by_target.items():
+        if len(order_list) == 1:
+            # Single Advance order - process normally
+            order, player = order_list[0]
+            try:
+                # Log order submission
+                target_info = f" to {order.target_hex}" if order.target_hex else ""
+                stance_info = f" with {order.stance} stance" if order.stance else ""
+                log_event(game_state, f"Player {player.id} submitted {order.order_type.value} for force {order.force.id}{target_info}{stance_info}")
+                
+                # Validate the order
+                if validate_order(order, game_state):
+                    # Log successful validation
+                    log_event(game_state, f"Order validated successfully for force {order.force.id}")
+                    
                     # Deduct Shih
                     player.update_shih(-2)
                     
@@ -272,15 +325,49 @@ def resolve_orders(orders: List[Order], game_state: GameState) -> Dict[str, List
                             terrain = game_state.map_data[target_hex].terrain
                             if terrain == "Contentious":
                                 log_event(game_state, f"Force {order.force.id} entered Contentious Ground at {target_hex}")
-                        
-        except OrderValidationError as e:
-            error_msg = f"Invalid order for force {order.force.id}: {order.order_type.value} - {str(e)}"
-            results["errors"].append(error_msg)
-            log_event(game_state, error_msg, error_type="validation_error")
+                
+            except OrderValidationError as e:
+                error_msg = f"Invalid order for force {order.force.id}: {order.order_type.value} - {str(e)}"
+                results["errors"].append(error_msg)
+                log_event(game_state, error_msg, error_type="validation_error")
+            except Exception as e:
+                error_msg = f"Unexpected error processing order for force {order.force.id}: {str(e)}"
+                results["errors"].append(error_msg)
+                log_event(game_state, error_msg, error_type="processing_error")
+    
+    # Process conflict groups - create confrontations for simultaneous advances
+    for target_hex, order_list in advance_conflicts:
+        try:
+            # Deduct Shih for all forces involved
+            for order, player in order_list:
+                player.update_shih(-2)
+                log_event(game_state, f"Player {player.id} spent 2 Shih on advance")
+            
+            # Update stances for all forces
+            for order, _ in order_list:
+                order.force.stance = order.stance
+                order.force.add_order_to_tendency(order.order_type.name)
+            
+            # Create confrontation between the first two forces (or more if needed)
+            # For simplicity, we'll create a confrontation between the first two forces
+            if len(order_list) >= 2:
+                order1, player1 = order_list[0]
+                order2, player2 = order_list[1]
+                
+                confrontation_data = {
+                    "attacking_force": order1.force.id,
+                    "target_hex": target_hex,
+                    "occupying_force": order2.force.id,
+                    "ghost_owner": None
+                }
+                results["confrontations"].append(confrontation_data)
+                
+                log_event(game_state, f"Simultaneous advance confrontation: {order1.force.id} ({order1.stance}) vs {order2.force.id} ({order2.stance}) at {target_hex}")
+            
         except Exception as e:
-            error_msg = f"Unexpected error processing order for force {order.force.id}: {str(e)}"
+            error_msg = f"Error processing simultaneous advance conflict at {target_hex}: {str(e)}"
             results["errors"].append(error_msg)
-            log_event(game_state, error_msg, error_type="processing_error")
+            log_event(game_state, error_msg, error_type="conflict_processing_error")
     
     # Log resolution completion
     log_event(game_state, f"Order resolution completed: {len(results['confrontations'])} confrontations, {len(ghosts)} ghosts created")
