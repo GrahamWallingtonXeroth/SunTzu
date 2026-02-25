@@ -1,1 +1,1 @@
-{"starting_chi": 100, "starting_shih": 10, "max_shih": 20, "force_count": 3, "base_chi_loss": 8, "tendency_modifier": 1}
+{"starting_shih": 8, "max_shih": 15, "base_shih_income": 2, "contentious_shih_bonus": 1, "force_count": 5, "board_size": 7, "fortify_bonus": 2, "shield_bonus": 2, "difficult_defense_bonus": 1, "domination_turns_required": 2}

@@ -1,69 +1,92 @@
-# Models for game elements based on GDD v0.7
-
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Dict
+from enum import Enum
+from typing import List, Tuple, Optional, Dict, Set
+
+
+class ForceRole(Enum):
+    """Secret role assigned to each force during deployment."""
+    SOVEREIGN = "Sovereign"   # Power 1. Lose it, lose the game.
+    VANGUARD = "Vanguard"     # Power 4. Your killers.
+    SCOUT = "Scout"           # Power 2. Reveals enemy roles via Scout order.
+    SHIELD = "Shield"         # Power 3. Adjacent friendly forces get +2 power.
+
+
+# Base combat power for each role
+ROLE_POWER = {
+    ForceRole.SOVEREIGN: 1,
+    ForceRole.VANGUARD: 4,
+    ForceRole.SCOUT: 2,
+    ForceRole.SHIELD: 3,
+}
+
+# How many of each role a player must deploy
+ROLE_COUNTS = {
+    ForceRole.SOVEREIGN: 1,
+    ForceRole.VANGUARD: 2,
+    ForceRole.SCOUT: 1,
+    ForceRole.SHIELD: 1,
+}
 
 
 @dataclass
 class Hex:
-    """Represents a map hex with axial coordinates and terrain type."""
-    q: int  # Axial coordinate q
-    r: int  # Axial coordinate r
-    terrain: str  # Terrain type: 'Open', 'Difficult', or 'Contentious'
+    """A map hex with axial coordinates and terrain type."""
+    q: int
+    r: int
+    terrain: str  # 'Open', 'Difficult', or 'Contentious'
 
 
 @dataclass
 class Force:
     """
-    Represents a player's force with position, stance, and order history.
-    Based on GDD: Forces have positions, stances (Mountain/River/Thunder),
-    and maintain tendency (last 3 orders) for AI behavior prediction.
-    """
-    id: str  # Force identifier (e.g., 'f1', 'f2', 'f3')
-    position: Tuple[int, int]  # Position as (q, r) axial coordinates
-    stance: str = 'Mountain'  # Current stance: 'Mountain', 'River', 'Thunder'
-    tendency: List[str] = field(default_factory=list)  # Last 3 orders for AI prediction
-    encircled_turns: int = 0  # Number of turns this force has been encircled
+    A player's force on the board.
 
-    def add_order_to_tendency(self, order: str) -> None:
-        """Add an order to the tendency list, maintaining only last 3."""
-        self.tendency.append(order)
-        if len(self.tendency) > 3:
-            self.tendency.pop(0)  # Remove oldest order
+    The role is hidden from the opponent until revealed through combat
+    or scouting. Every force looks identical to the enemy — a blank token
+    on a hex. The entire game turns on what you know and what you don't.
+    """
+    id: str
+    position: Tuple[int, int]
+    role: Optional[ForceRole] = None   # Assigned during deployment
+    revealed: bool = False             # True once role is public knowledge
+    alive: bool = True
+    fortified: bool = False            # True for this turn only if Fortify order given
+
+    @property
+    def base_power(self) -> int:
+        if self.role is None:
+            return 0
+        return ROLE_POWER[self.role]
+
 
 @dataclass
 class Player:
     """
-    Represents a player with resources and forces.
-    Based on GDD: Players have Chi (morale, starts 100) and Shih (momentum, 
-    starts 10, max 20) as primary resources. Each player starts with 3 forces.
+    A player with resources, forces, and private intelligence.
+
+    known_enemy_roles tracks what this player has learned about enemy forces
+    through scouting (private) and combat (public). The opponent doesn't
+    know what you've scouted.
     """
-    id: str  # Player identifier ('p1' or 'p2')
-    chi: int = 100  # Chi resource (morale, starts at 100)
-    shih: int = 10  # Shih resource (momentum, starts at 10, max 20)
-    max_shih: int = 20  # Maximum Shih value
-    forces: List[Force] = field(default_factory=list)  # List of player's forces
+    id: str
+    shih: int = 8
+    max_shih: int = 15
+    forces: List[Force] = field(default_factory=list)
+    deployed: bool = False
+    known_enemy_roles: Dict[str, str] = field(default_factory=dict)
+    domination_turns: int = 0  # Consecutive turns controlling all Contentious hexes
 
     def add_force(self, force: Force) -> None:
-        """Add a force to this player's forces."""
         self.forces.append(force)
 
     def get_force_by_id(self, force_id: str) -> Optional[Force]:
-        """Get a force by its ID."""
         for force in self.forces:
             if force.id == force_id:
                 return force
         return None
 
-    def update_shih(self, amount: int, max_shih: Optional[int] = None) -> None:
-        """Update Shih resource, ensuring it stays within 0-max_shih range."""
-        if max_shih is None:
-            max_shih = self.max_shih
-        self.shih = max(0, min(max_shih, self.shih + amount))
+    def get_alive_forces(self) -> List[Force]:
+        return [f for f in self.forces if f.alive]
 
-    def update_chi(self, amount: int) -> None:
-        """Update Chi resource, ensuring it doesn't go below 0."""
-        self.chi = max(0, self.chi + amount)
-
-
-
+    def update_shih(self, amount: int) -> None:
+        self.shih = max(0, min(self.max_shih, self.shih + amount))
