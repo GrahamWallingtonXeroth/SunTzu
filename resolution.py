@@ -1,24 +1,24 @@
 """
-Combat resolution for The Unfought Battle v3.
+Combat resolution for The Unfought Battle v4.
 
-Combat is decisive. Both power values are revealed permanently — even winning
-costs you the secrecy that was protecting you.
+Combat is decisive but not always lethal. Both power values are revealed
+permanently — even winning costs you the secrecy that was protecting you.
 
-v3 changes:
-- Power values (1-5) replace role-based power
-- No more Shield adjacency bonus
-- Ambush bonus: +3 if the ambushing force is defending against a moving enemy
-- Combat variance: random +/-1 to each side (coin flip)
+v4 changes:
+- Support bonus: +1 per adjacent friendly force, max +2
+- Close combat retreat: losers survive (retreat) when power difference ≤ 1
+- Ambush bonus reduced: +2 (was +3)
 - A revealed power-5 can be avoided. A revealed power-1 (Sovereign) can be hunted.
 """
 
 import json
 import os
 import random
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from models import Force, SOVEREIGN_POWER
 from state import GameState
 from orders import is_adjacent
+from map_gen import get_hex_neighbors, hex_distance
 
 
 def load_combat_config() -> Dict:
@@ -26,7 +26,10 @@ def load_combat_config() -> Dict:
     defaults = {
         'fortify_bonus': 2,
         'difficult_defense_bonus': 1,
-        'ambush_bonus': 3,
+        'ambush_bonus': 2,
+        'support_bonus': 1,
+        'max_support_bonus': 2,
+        'retreat_threshold': 1,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -47,14 +50,16 @@ def calculate_effective_power(
     hex_pos: Optional[Tuple[int, int]] = None,
     apply_variance: bool = True,
     rng: Optional[random.Random] = None,
+    friendly_forces: Optional[List[Force]] = None,
 ) -> int:
     """
     Calculate a force's effective combat power.
 
     Base power (assigned value 1-5)
     + 2 if fortified this turn
-    + 3 if ambushing and defending
+    + 2 if ambushing and defending
     + 1 if defending on Difficult terrain
+    + 1 per adjacent friendly force (max +2) — support bonus
     + random(-1, +1) combat variance (coin flip)
     """
     config = load_combat_config()
@@ -74,12 +79,50 @@ def calculate_effective_power(
         if hex_data and hex_data.terrain == 'Difficult':
             power += config['difficult_defense_bonus']
 
+    # Support bonus: +1 per adjacent friendly force, capped
+    if friendly_forces is not None:
+        combat_pos = hex_pos if hex_pos else force.position
+        adjacent_friendlies = sum(
+            1 for ally in friendly_forces
+            if ally.id != force.id and ally.alive
+            and is_adjacent(ally.position, combat_pos)
+        )
+        power += min(
+            adjacent_friendlies * config['support_bonus'],
+            config['max_support_bonus']
+        )
+
     # Combat variance: +1 or -1 randomly
     if apply_variance:
         r = rng if rng else random
         power += r.choice([-1, 1])
 
     return power
+
+
+def _find_retreat_hex(
+    force: Force,
+    combat_hex: Tuple[int, int],
+    game_state: GameState,
+) -> Optional[Tuple[int, int]]:
+    """
+    Find a valid retreat hex for a force pushed out of combat.
+    Prefers hexes closest to the force's pre-combat position.
+    """
+    candidates = []
+    for nq, nr in get_hex_neighbors(combat_hex[0], combat_hex[1]):
+        pos = (nq, nr)
+        if not game_state.is_valid_position(pos):
+            continue
+        occupant = game_state.get_force_at_position(pos)
+        if occupant is not None:
+            continue
+        candidates.append(pos)
+    if not candidates:
+        return None
+    # Pick the hex closest to the force's current position (retreat toward origin)
+    return min(candidates, key=lambda p: hex_distance(
+        p[0], p[1], force.position[0], force.position[1]))
 
 
 def resolve_combat(
@@ -95,11 +138,14 @@ def resolve_combat(
     Resolve combat between two forces.
 
     1. Both power values are revealed permanently (the information cost of fighting).
-    2. Calculate effective power for each (with variance).
+    2. Calculate effective power for each (with variance and support).
     3. Higher power wins. Equal power = both retreat.
-    4. Loser is eliminated. Winner occupies the hex.
+    4. If power difference > retreat_threshold: loser is eliminated.
+       If power difference <= retreat_threshold: loser retreats alive.
     5. If a Sovereign (power 1) is eliminated, that player loses.
     """
+    config = load_combat_config()
+
     result: Dict[str, Any] = {
         'attacker_id': attacker.id,
         'defender_id': defender.id,
@@ -122,35 +168,60 @@ def resolve_combat(
     if def_player and attacker.power is not None:
         def_player.known_enemy_powers[attacker.id] = attacker.power
 
-    # Step 2: Calculate effective power (with variance)
+    # Step 2: Calculate effective power (with variance and support)
+    att_forces = att_player.get_alive_forces() if att_player else []
+    def_forces = def_player.get_alive_forces() if def_player else []
+
     att_power = calculate_effective_power(
-        attacker, game_state, is_defender=False, hex_pos=combat_hex, rng=rng
+        attacker, game_state, is_defender=False, hex_pos=combat_hex, rng=rng,
+        friendly_forces=att_forces,
     )
     def_power = calculate_effective_power(
-        defender, game_state, is_defender=True, hex_pos=combat_hex, rng=rng
+        defender, game_state, is_defender=True, hex_pos=combat_hex, rng=rng,
+        friendly_forces=def_forces,
     )
 
     result['attacker_power'] = att_power
     result['defender_power'] = def_power
 
-    # Step 3: Determine outcome
+    # Step 3: Determine outcome with retreat mechanic
+    power_diff = abs(att_power - def_power)
+    retreat_threshold = config['retreat_threshold']
+
     if att_power > def_power:
-        # Attacker wins
-        defender.alive = False
+        # Attacker wins — takes the hex
+        if power_diff <= retreat_threshold:
+            # Close combat: defender retreats alive
+            retreat_hex = _find_retreat_hex(defender, combat_hex, game_state)
+            if retreat_hex:
+                defender.position = retreat_hex
+                result['outcome'] = 'attacker_wins_retreat'
+                result['retreated'] = defender.id
+                result['retreat_to'] = retreat_hex
+            else:
+                # No retreat available — defender is eliminated
+                defender.alive = False
+                result['outcome'] = 'attacker_wins'
+                result['eliminated'] = defender.id
+        else:
+            # Decisive: defender is eliminated
+            defender.alive = False
+            result['outcome'] = 'attacker_wins'
+            result['eliminated'] = defender.id
+
         attacker.position = combat_hex
-        result['outcome'] = 'attacker_wins'
-        result['eliminated'] = defender.id
 
         game_state.log.append({
             'turn': game_state.turn, 'phase': 'resolve',
             'event': (
                 f'Combat at {combat_hex}: {attacker.id} (power {att_power}) '
-                f'defeats {defender.id} (power {def_power})'
+                f'{"pushes back" if "retreat" in result["outcome"] else "defeats"} '
+                f'{defender.id} (power {def_power})'
             ),
         })
 
-        # Check Sovereign capture
-        if defender.is_sovereign:
+        # Check Sovereign capture (only if eliminated, not retreated)
+        if not defender.alive and defender.is_sovereign:
             result['sovereign_captured'] = {
                 'loser': defender_player_id,
                 'winner': attacker_player_id,
@@ -159,19 +230,26 @@ def resolve_combat(
 
     elif def_power > att_power:
         # Defender wins
-        attacker.alive = False
-        result['outcome'] = 'defender_wins'
-        result['eliminated'] = attacker.id
+        if power_diff <= retreat_threshold:
+            # Close combat: attacker retreats alive (stays at original position)
+            result['outcome'] = 'defender_wins_retreat'
+            result['retreated'] = attacker.id
+        else:
+            # Decisive: attacker eliminated
+            attacker.alive = False
+            result['outcome'] = 'defender_wins'
+            result['eliminated'] = attacker.id
 
         game_state.log.append({
             'turn': game_state.turn, 'phase': 'resolve',
             'event': (
                 f'Combat at {combat_hex}: {defender.id} (power {def_power}) '
-                f'defeats {attacker.id} (power {att_power})'
+                f'{"pushes back" if "retreat" in result["outcome"] else "defeats"} '
+                f'{attacker.id} (power {att_power})'
             ),
         })
 
-        if attacker.is_sovereign:
+        if not attacker.alive and attacker.is_sovereign:
             result['sovereign_captured'] = {
                 'loser': attacker_player_id,
                 'winner': defender_player_id,

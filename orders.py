@@ -1,20 +1,21 @@
 """
-Order processing for The Unfought Battle v3.
+Order processing for The Unfought Battle v4.
 
-Four orders. Movement is free. Everything else costs momentum.
+Five orders. Movement is free. Everything else costs momentum.
 
 Move    — 0 Shih. Go to an adjacent non-Scorched hex.
-Scout   — 3 Shih. Stay put. Learn the power of one enemy force within 2 hexes. Secret.
+Charge  — 1 Shih. Move up to 2 hexes. Fast strike for timing and surprise.
+Scout   — 2 Shih. Stay put. Learn the power of one enemy force within 2 hexes. Secret.
 Fortify — 2 Shih. Stay put. +2 combat power this turn.
 Ambush  — 2 Shih. Stay put. If an enemy moves to your hex or adjacent hex this turn,
-          +3 power in the resulting combat. The opponent doesn't know you ambushed.
+          +2 power in the resulting combat. The opponent doesn't know you ambushed.
 """
 
 from enum import Enum
 from typing import Optional, Tuple, List, Dict, Any
 from models import Force
 from state import GameState
-from map_gen import hex_distance
+from map_gen import hex_distance, get_hex_neighbors
 
 
 class OrderType(Enum):
@@ -22,14 +23,16 @@ class OrderType(Enum):
     SCOUT = "Scout"
     FORTIFY = "Fortify"
     AMBUSH = "Ambush"
+    CHARGE = "Charge"
 
 
 # Shih costs
 ORDER_COSTS = {
     OrderType.MOVE: 0,
-    OrderType.SCOUT: 3,
+    OrderType.SCOUT: 2,
     OrderType.FORTIFY: 2,
     OrderType.AMBUSH: 2,
+    OrderType.CHARGE: 1,
 }
 
 
@@ -39,7 +42,7 @@ class Order:
                  scout_target_id: Optional[str] = None):
         self.order_type = order_type
         self.force = force
-        self.target_hex = target_hex          # For Move
+        self.target_hex = target_hex          # For Move and Charge
         self.scout_target_id = scout_target_id  # For Scout: which enemy force to reveal
 
 
@@ -89,6 +92,26 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
         if not is_adjacent(force.position, order.target_hex):
             raise OrderValidationError(f"Target {order.target_hex} is not adjacent to {force.position}")
 
+    elif order.order_type == OrderType.CHARGE:
+        if not order.target_hex:
+            raise OrderValidationError("Charge requires a target hex")
+        if not game_state.is_valid_position(order.target_hex):
+            raise OrderValidationError(f"Target {order.target_hex} is off the board or Scorched")
+        dist = hex_distance(force.position[0], force.position[1],
+                           order.target_hex[0], order.target_hex[1])
+        if dist < 1 or dist > 2:
+            raise OrderValidationError(f"Charge target must be 1-2 hexes away, got {dist}")
+        if dist == 2:
+            # Verify there's a walkable intermediate hex (shared neighbor)
+            intermediates = set(get_hex_neighbors(force.position[0], force.position[1]))
+            target_neighbors = set(get_hex_neighbors(order.target_hex[0], order.target_hex[1]))
+            shared = intermediates & target_neighbors
+            valid_path = any(
+                game_state.is_valid_position(h) for h in shared
+            )
+            if not valid_path:
+                raise OrderValidationError("No valid path for 2-hex charge")
+
     elif order.order_type == OrderType.SCOUT:
         if not order.scout_target_id:
             raise OrderValidationError("Scout requires a scout_target_id")
@@ -126,7 +149,7 @@ def resolve_orders(
     1. Deduct Shih costs for all orders
     2. Apply Fortify markers
     3. Apply Ambush markers
-    4. Process Moves simultaneously — detect collisions
+    4. Process Moves and Charges simultaneously — detect collisions
     5. Resolve combats at contested hexes (ambush bonus applies here)
     6. Apply Scout revelations
     7. Clear Fortify/Ambush markers at end of next resolution
@@ -179,9 +202,10 @@ def resolve_orders(
                 'event': f'{order.force.id} sets ambush at {order.force.position} (hidden)',
             })
 
-    # Phase 4: Process Moves
-    # Collect all move targets
-    move_orders = [(o, pid) for o, pid in valid_orders if o.order_type == OrderType.MOVE]
+    # Phase 4: Process Moves and Charges
+    # Both are treated as movement orders with a target hex
+    move_orders = [(o, pid) for o, pid in valid_orders
+                   if o.order_type in (OrderType.MOVE, OrderType.CHARGE)]
     move_targets: Dict[Tuple[int, int], List[tuple]] = {}
     for order, pid in move_orders:
         target = order.target_hex

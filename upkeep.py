@@ -117,28 +117,37 @@ def check_victory(game_state: GameState, combat_sovereign_capture: Optional[Dict
         }
 
     # 2 & 3. Check if either player has lost their Sovereign or all forces
+    # Collect ALL losers before deciding — handles simultaneous death fairly
+    losers = []
     for player in game_state.players:
         alive_forces = player.get_alive_forces()
         # All forces dead = elimination
         if len(alive_forces) == 0:
-            opponent = game_state.get_opponent(player.id)
-            if opponent:
-                return {
-                    'winner': opponent.id,
-                    'type': 'elimination',
-                }
+            losers.append(('elimination', player))
+            continue
         # Sovereign dead specifically (could be from Noose)
         sovereign_alive = any(f.is_sovereign for f in alive_forces)
         if not sovereign_alive and player.deployed:
-            # Check they had a sovereign assigned (game is in progress)
             had_sovereign = any(f.power == SOVEREIGN_POWER for f in player.forces)
             if had_sovereign:
-                opponent = game_state.get_opponent(player.id)
-                if opponent:
-                    return {
-                        'winner': opponent.id,
-                        'type': 'sovereign_capture',
-                    }
+                losers.append(('sovereign_capture', player))
+
+    # Both players lost simultaneously — draw
+    if len(losers) >= 2:
+        return {
+            'winner': 'draw',
+            'type': 'mutual_destruction',
+        }
+
+    # One player lost
+    if len(losers) == 1:
+        reason, loser = losers[0]
+        opponent = game_state.get_opponent(loser.id)
+        if opponent:
+            return {
+                'winner': opponent.id,
+                'type': reason,
+            }
 
     return None
 

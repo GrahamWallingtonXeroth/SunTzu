@@ -1,4 +1,4 @@
-"""Tests for 7x7 hex map generation — v3 with shrinking board support."""
+"""Tests for 7x7 hex map generation — v4 with shrinking board support."""
 
 import pytest
 from map_gen import (
@@ -102,8 +102,11 @@ class TestMapGeneration:
 
     def test_starting_positions_are_open(self):
         m = generate_map(seed=42)
-        assert m[(0, 0)].terrain == 'Open'
-        assert m[(6, 6)].terrain == 'Open'
+        # v4: starting cluster centers at (1,2) and (5,4)
+        p1_positions = [(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)]
+        p2_positions = [(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)]
+        for pos in p1_positions + p2_positions:
+            assert m[pos].terrain == 'Open', f"Starting position {pos} should be Open"
 
     def test_has_difficult_terrain(self):
         m = generate_map(seed=42)
@@ -114,8 +117,8 @@ class TestMapGeneration:
         m = generate_map(seed=42)
         contentious = [pos for pos, h in m.items() if h.terrain == 'Contentious']
         for ch in contentious:
-            p1_path = a_star_path((0, 0), ch, m)
-            p2_path = a_star_path((6, 6), ch, m)
+            p1_path = a_star_path((1, 2), ch, m)
+            p2_path = a_star_path((5, 4), ch, m)
             assert p1_path is not None
             assert p2_path is not None
 

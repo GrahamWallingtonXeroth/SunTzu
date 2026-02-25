@@ -109,14 +109,10 @@ def initialize_game(seed: int) -> GameState:
     game_id = str(uuid.uuid4())
     map_data = generate_map(seed, board_size)
 
-    # P1 starts at top-left corner cluster
-    p1_positions = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0)][:force_count]
-    # P2 starts at bottom-right corner cluster
-    last = board_size - 1
-    p2_positions = [
-        (last, last), (last - 1, last), (last, last - 1),
-        (last - 1, last - 1), (last - 2, last)
-    ][:force_count]
+    # P1: left cluster, distance 2-4 from center, safe from first Noose
+    p1_positions = [(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)][:force_count]
+    # P2: right cluster, distance 2-4 from center, symmetric to P1
+    p2_positions = [(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)][:force_count]
 
     player1 = Player(id='p1', shih=starting_shih, max_shih=max_shih)
     for i, pos in enumerate(p1_positions, 1):

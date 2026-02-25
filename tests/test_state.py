@@ -1,4 +1,4 @@
-"""Tests for v3 game state management, initialization, and deployment."""
+"""Tests for v4 game state management, initialization, and deployment."""
 
 import pytest
 from state import (
@@ -31,7 +31,7 @@ class TestInitialization:
 
     def test_players_start_with_shih(self, game):
         for player in game.players:
-            assert player.shih == 4
+            assert player.shih == 5
 
     def test_map_is_7x7(self, game):
         assert len(game.map_data) == 49  # 7x7
@@ -40,13 +40,16 @@ class TestInitialization:
         contentious = [h for h in game.map_data.values() if h.terrain == 'Contentious']
         assert len(contentious) == 3
 
-    def test_players_start_at_opposite_corners(self, game):
+    def test_players_start_at_opposite_sides(self, game):
+        """P1 starts left cluster near (1,2), P2 starts right cluster near (5,4)."""
         p1 = game.get_player_by_id('p1')
         p2 = game.get_player_by_id('p2')
+        p1_expected = {(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)}
+        p2_expected = {(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)}
         p1_positions = {f.position for f in p1.forces}
         p2_positions = {f.position for f in p2.forces}
-        assert any(q <= 2 and r <= 2 for q, r in p1_positions)
-        assert any(q >= 4 and r >= 4 for q, r in p2_positions)
+        assert p1_positions == p1_expected
+        assert p2_positions == p2_expected
 
     def test_shrink_stage_starts_at_0(self, game):
         assert game.shrink_stage == 0
@@ -131,15 +134,15 @@ class TestPlayerView:
             assert f['power'] is not None
 
     def test_enemy_forces_hidden_by_fog(self, deployed_game):
-        """Enemy forces at (6,6) area are far from p1 at (0,0) area — fog of war hides them."""
+        """Enemy forces near (5,4) are far from p1 near (1,2) — fog of war hides them."""
         view = get_player_view(deployed_game, 'p1')
-        # p2 forces are at (6,6) corner, p1 at (0,0) — far beyond visibility range
+        # p2 forces are at (5,3)-(6,4) cluster, p1 at (0,2)-(1,3) — far beyond visibility range
         assert len(view['enemy_forces']) == 0
 
     def test_enemy_forces_visible_when_close(self, deployed_game):
         """Move an enemy force close to p1's forces — it becomes visible."""
         p2 = deployed_game.get_player_by_id('p2')
-        p2.forces[0].position = (1, 0)  # Adjacent to p1_f1 at (0,0)
+        p2.forces[0].position = (2, 1)  # Adjacent to p1_f2 at (1,1)
         view = get_player_view(deployed_game, 'p1')
         visible_ids = [f['id'] for f in view['enemy_forces']]
         assert p2.forces[0].id in visible_ids
@@ -147,7 +150,7 @@ class TestPlayerView:
     def test_visible_enemy_hides_power(self, deployed_game):
         """Visible enemy forces don't show power unless scouted/revealed."""
         p2 = deployed_game.get_player_by_id('p2')
-        p2.forces[0].position = (1, 0)
+        p2.forces[0].position = (2, 1)  # Within visibility of p1 forces
         view = get_player_view(deployed_game, 'p1')
         enemy = view['enemy_forces'][0]
         assert 'power' not in enemy
@@ -160,13 +163,13 @@ class TestPlayerView:
     def test_view_includes_shih(self, deployed_game):
         view = get_player_view(deployed_game, 'p1')
         assert 'your_shih' in view
-        assert view['your_shih'] == 4
+        assert view['your_shih'] == 5
 
     def test_scouted_powers_visible(self, deployed_game):
         p1 = deployed_game.get_player_by_id('p1')
         p2 = deployed_game.get_player_by_id('p2')
-        # Move enemy close and scout it
-        p2.forces[0].position = (2, 0)
+        # Move enemy close to p1 cluster and scout it
+        p2.forces[0].position = (2, 1)  # Within visibility of p1 at (1,1)
         p1.known_enemy_powers[p2.forces[0].id] = 1
         view = get_player_view(deployed_game, 'p1')
         scouted = [f for f in view['enemy_forces'] if f.get('scouted')]
@@ -176,7 +179,7 @@ class TestPlayerView:
     def test_revealed_powers_visible(self, deployed_game):
         p2 = deployed_game.get_player_by_id('p2')
         p2.forces[0].revealed = True
-        p2.forces[0].position = (2, 0)  # Within visibility
+        p2.forces[0].position = (2, 1)  # Within visibility of p1 at (1,1)
         view = get_player_view(deployed_game, 'p1')
         revealed = [f for f in view['enemy_forces'] if f.get('revealed')]
         assert len(revealed) == 1

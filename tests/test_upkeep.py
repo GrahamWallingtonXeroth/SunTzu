@@ -1,4 +1,4 @@
-"""Tests for v3 upkeep: shrinking board, victory conditions, Shih income, domination."""
+"""Tests for v4 upkeep: shrinking board, victory conditions, Shih income, domination, mutual destruction."""
 
 import pytest
 from upkeep import perform_upkeep, check_victory, get_controlled_contentious, apply_board_shrink
@@ -8,8 +8,8 @@ from models import Player, Force, Hex, SOVEREIGN_POWER
 
 def make_upkeep_state():
     """Create a game state ready for upkeep testing."""
-    p1 = Player(id='p1', shih=4, max_shih=8)
-    p2 = Player(id='p2', shih=4, max_shih=8)
+    p1 = Player(id='p1', shih=5, max_shih=8)
+    p2 = Player(id='p2', shih=5, max_shih=8)
 
     # P1 forces with power values
     p1.add_force(Force(id='p1_f1', position=(3, 3), power=1))  # Sovereign
@@ -140,19 +140,66 @@ class TestVictoryConditions:
         results = perform_upkeep(game)
         assert p1.domination_turns == 0  # Reset
 
+    def test_simultaneous_sovereign_death_is_draw(self):
+        """If both Sovereigns die at the same time (e.g., from Noose), result is a draw."""
+        game = make_upkeep_state()
+        p1 = game.get_player_by_id('p1')
+        p2 = game.get_player_by_id('p2')
+        # Kill both sovereigns
+        for f in p1.forces:
+            if f.is_sovereign:
+                f.alive = False
+        for f in p2.forces:
+            if f.is_sovereign:
+                f.alive = False
+        result = check_victory(game)
+        assert result is not None
+        assert result['winner'] == 'draw'
+        assert result['type'] == 'mutual_destruction'
+
+    def test_simultaneous_elimination_is_draw(self):
+        """If all forces of both players die simultaneously, result is a draw."""
+        game = make_upkeep_state()
+        p1 = game.get_player_by_id('p1')
+        p2 = game.get_player_by_id('p2')
+        for f in p1.forces:
+            f.alive = False
+        for f in p2.forces:
+            f.alive = False
+        result = check_victory(game)
+        assert result is not None
+        assert result['winner'] == 'draw'
+        assert result['type'] == 'mutual_destruction'
+
+    def test_simultaneous_sovereign_death_by_noose(self):
+        """Both Sovereigns on far edges die from Noose shrink -- game ends as draw."""
+        game = make_upkeep_state()
+        p1 = game.get_player_by_id('p1')
+        p2 = game.get_player_by_id('p2')
+        # Place both sovereigns at far corners
+        p1.forces[0].position = (0, 0)  # Distance 6 from center
+        p2.forces[0].position = (6, 6)  # Distance 6 from center
+        # Place other forces safely near center
+        p1.forces[1].position = (3, 2)
+        p2.forces[1].position = (3, 4)
+        game.turn = 4  # shrink_interval = 4
+        results = perform_upkeep(game)
+        assert results['winner'] == 'draw'
+        assert results['victory_type'] == 'mutual_destruction'
+
 
 class TestBoardShrink:
     def test_shrink_at_interval(self):
         """Board shrinks at turn multiples of shrink_interval."""
         game = make_upkeep_state()
-        game.turn = 3  # shrink_interval = 3
+        game.turn = 4  # shrink_interval = 4
         assert game.shrink_stage == 0
         perform_upkeep(game)
         assert game.shrink_stage == 1
 
     def test_no_shrink_before_interval(self):
         game = make_upkeep_state()
-        game.turn = 2
+        game.turn = 3  # Before shrink_interval of 4
         perform_upkeep(game)
         assert game.shrink_stage == 0
 
@@ -186,7 +233,7 @@ class TestBoardShrink:
         p2 = game.get_player_by_id('p2')
         p2.forces[0].position = (0, 0)  # Sovereign at far corner
         p2.forces[1].position = (3, 2)  # Other force safe
-        game.turn = 3  # shrink_interval = 3
+        game.turn = 4  # shrink_interval = 4
         results = perform_upkeep(game)
         assert results['winner'] == 'p1'
         assert results['victory_type'] == 'sovereign_capture'

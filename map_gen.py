@@ -106,7 +106,7 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
     Generate a 7x7 hex map.
 
     Layout:
-    - Players start at opposite corners: P1 at (0,0), P2 at (6,6)
+    - P1 starts left cluster (distance 2-4 from center), P2 right cluster (symmetric)
     - 3 Contentious hexes clustered in the center — the objectives
     - Difficult terrain scattered to create chokepoints and cover
     - Both players have equal path lengths to the center
@@ -119,8 +119,13 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
         for r in range(size):
             map_data[(q, r)] = Hex(q=q, r=r, terrain='Open')
 
-    p1_start = (0, 0)
-    p2_start = (size - 1, size - 1)
+    # Starting positions: cluster centers for path balance
+    p1_start = (1, 2)
+    p2_start = (5, 4)
+
+    # All starting positions (for protected zone calculation)
+    p1_positions = [(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)]
+    p2_positions = [(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)]
 
     # Place 3 Contentious hexes in the center zone (q=2-4, r=2-4)
     center_min = size // 2 - 1  # 2
@@ -136,14 +141,10 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
     for pos in contentious_hexes:
         map_data[pos].terrain = 'Contentious'
 
-    # Protect starting zones and paths to center from becoming Difficult
+    # Protect starting positions from becoming Difficult
     protected: set = set()
-    # Starting positions and their immediate neighbors
-    for start in [p1_start, p2_start]:
+    for start in p1_positions + p2_positions:
         protected.add(start)
-        for n in get_hex_neighbors(start[0], start[1]):
-            if is_valid_hex(n[0], n[1], size):
-                protected.add(n)
     # Contentious hexes are never Difficult
     for pos in contentious_hexes:
         protected.add(pos)
