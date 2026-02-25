@@ -22,6 +22,7 @@ class TestForce:
         assert f.alive is True
         assert f.fortified is False
         assert f.ambushing is False
+        assert f.charging is False
 
     def test_is_sovereign_when_power_1(self):
         f = Force(id='p1_f1', position=(0, 0), power=1)

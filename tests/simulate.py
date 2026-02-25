@@ -1,10 +1,12 @@
 """
-Simulation harness for The Unfought Battle v4.
+Simulation harness for The Unfought Battle v5.
 
 Provides AI strategy players and a game runner that can play thousands of
 games to measure emergent properties. The strategies range from brain-dead
 (random) to competent (heuristic), allowing us to test whether the game
 rewards skill, creates diverse outcomes, and avoids degenerate states.
+
+v5: Supply lines gate special orders. Forces without supply can only Move.
 
 This module is the engine. The tests are in test_gameplay.py.
 """
@@ -17,7 +19,7 @@ from dataclasses import dataclass, field
 from state import initialize_game, apply_deployment, GameState
 from orders import (
     Order, OrderType, OrderValidationError, resolve_orders,
-    is_adjacent, within_range, ORDER_COSTS,
+    is_adjacent, within_range, ORDER_COSTS, has_supply,
 )
 from upkeep import perform_upkeep
 from map_gen import get_hex_neighbors, hex_distance, is_valid_hex, BOARD_SIZE, distance_from_center
@@ -136,6 +138,16 @@ def _move_toward(force: Force, target: Tuple[int, int], game_state: GameState) -
     return best
 
 
+def _can_order(force: Force, player: Player, order_type: OrderType) -> bool:
+    """Check if a force can execute an order (sufficient Shih + supply line)."""
+    if player.shih < ORDER_COSTS[order_type]:
+        return False
+    if order_type in (OrderType.SCOUT, OrderType.FORTIFY, OrderType.AMBUSH, OrderType.CHARGE):
+        if not has_supply(force, player.forces):
+            return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Concrete strategies
 # ---------------------------------------------------------------------------
@@ -153,16 +165,20 @@ class RandomStrategy(Strategy):
         player = game_state.get_player_by_id(player_id)
         orders = []
         for force in player.get_alive_forces():
-            choices = [OrderType.FORTIFY]
+            choices = []
             moves = _valid_moves(force, game_state)
             if moves:
                 choices.append(OrderType.MOVE)
-            if player.shih >= ORDER_COSTS[OrderType.AMBUSH]:
+            if _can_order(force, player, OrderType.FORTIFY):
+                choices.append(OrderType.FORTIFY)
+            if _can_order(force, player, OrderType.AMBUSH):
                 choices.append(OrderType.AMBUSH)
-            if player.shih >= ORDER_COSTS[OrderType.CHARGE]:
+            if _can_order(force, player, OrderType.CHARGE):
                 charges = _valid_charge_targets(force, game_state)
                 if charges:
                     choices.append(OrderType.CHARGE)
+            if not choices:
+                continue
             pick = rng.choice(choices)
             if pick == OrderType.MOVE:
                 orders.append(Order(pick, force, target_hex=rng.choice(moves)))
@@ -173,14 +189,7 @@ class RandomStrategy(Strategy):
                 elif moves:
                     orders.append(Order(OrderType.MOVE, force, target_hex=rng.choice(moves)))
             else:
-                if player.shih >= ORDER_COSTS[pick]:
-                    orders.append(Order(pick, force))
-                else:
-                    # Fall back to free move or fortify
-                    if moves:
-                        orders.append(Order(OrderType.MOVE, force, target_hex=rng.choice(moves)))
-                    else:
-                        orders.append(Order(OrderType.FORTIFY, force))
+                orders.append(Order(pick, force))
         return orders
 
 
@@ -214,19 +223,19 @@ class AggressiveStrategy(Strategy):
 
             # Sovereign: stay safe — fortify or retreat
             if force.is_sovereign:
-                if enemies_adjacent and player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                if enemies_adjacent and _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
                 else:
                     best = _move_toward(force, center, game_state)
                     if best:
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                    elif player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                    elif _can_order(force, player, OrderType.FORTIFY):
                         orders.append(Order(OrderType.FORTIFY, force))
                 continue
 
             # On contentious hex with enemies near: fortify to hold it
             if on_contentious and enemies_adjacent:
-                if player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                if _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
                     continue
 
@@ -236,7 +245,7 @@ class AggressiveStrategy(Strategy):
                     force.position[0], force.position[1], e.position[0], e.position[1]))
                 dist = hex_distance(force.position[0], force.position[1],
                                    target_enemy.position[0], target_enemy.position[1])
-                if dist == 2 and player.shih >= ORDER_COSTS[OrderType.CHARGE]:
+                if dist == 2 and _can_order(force, player, OrderType.CHARGE):
                     orders.append(Order(OrderType.CHARGE, force, target_hex=target_enemy.position))
                     continue
                 best = _move_toward(force, target_enemy.position, game_state)
@@ -245,7 +254,7 @@ class AggressiveStrategy(Strategy):
                     continue
 
             # Weaker forces with adjacent enemies: fortify for defense
-            if enemies_adjacent and player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+            if enemies_adjacent and _can_order(force, player, OrderType.FORTIFY):
                 orders.append(Order(OrderType.FORTIFY, force))
                 continue
 
@@ -262,7 +271,7 @@ class AggressiveStrategy(Strategy):
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
             else:
-                if player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                if _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
 
         return orders
@@ -294,13 +303,13 @@ class CautiousStrategy(Strategy):
                                 if hex_distance(force.position[0], force.position[1],
                                                 e.position[0], e.position[1]) <= 1]
             if enemies_adjacent and force.power and force.power > 1:
-                if player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                if _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
                     continue
 
             # If enemies are in scout range and we haven't scouted them, scout
             unscouted = [e for e in enemies_near if e.id not in player.known_enemy_powers]
-            if unscouted and player.shih >= ORDER_COSTS[OrderType.SCOUT]:
+            if unscouted and _can_order(force, player, OrderType.SCOUT):
                 target = unscouted[0]
                 orders.append(Order(OrderType.SCOUT, force, scout_target_id=target.id))
                 continue
@@ -318,7 +327,7 @@ class CautiousStrategy(Strategy):
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
-            else:
+            elif _can_order(force, player, OrderType.FORTIFY):
                 orders.append(Order(OrderType.FORTIFY, force))
 
         return orders
@@ -346,13 +355,13 @@ class AmbushStrategy(Strategy):
             enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
 
             # If on a contentious hex with enemies nearby, ambush
-            if on_contentious and enemies_near and player.shih >= ORDER_COSTS[OrderType.AMBUSH]:
+            if on_contentious and enemies_near and _can_order(force, player, OrderType.AMBUSH):
                 orders.append(Order(OrderType.AMBUSH, force))
                 continue
 
             # If on a contentious hex with no enemies, fortify to hold it cheaply
             if on_contentious and not enemies_near:
-                if player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                if _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
                     continue
 
@@ -362,7 +371,7 @@ class AmbushStrategy(Strategy):
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
-            else:
+            elif _can_order(force, player, OrderType.FORTIFY):
                 orders.append(Order(OrderType.FORTIFY, force))
 
         return orders
@@ -384,7 +393,7 @@ class TurtleStrategy(Strategy):
         player = game_state.get_player_by_id(player_id)
         orders = []
         for force in player.get_alive_forces():
-            if player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+            if _can_order(force, player, OrderType.FORTIFY):
                 orders.append(Order(OrderType.FORTIFY, force))
             else:
                 moves = _valid_moves(force, game_state)
@@ -450,9 +459,9 @@ class CoordinatorStrategy(Strategy):
             # On contentious with support? Hold position.
             on_contentious = any(force.position == c for c in contentious)
             if on_contentious and adj_friends >= 1:
-                if enemies_near and player.shih >= ORDER_COSTS[OrderType.AMBUSH]:
+                if enemies_near and _can_order(force, player, OrderType.AMBUSH):
                     orders.append(Order(OrderType.AMBUSH, force))
-                elif player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                elif _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
                 else:
                     # Stay put - no order needed, but must issue something
@@ -517,7 +526,7 @@ class SovereignHunterStrategy(Strategy):
                 dist = hex_distance(force.position[0], force.position[1],
                                    sovereign_pos[0], sovereign_pos[1])
                 # Charge if within 2 hexes
-                if dist <= 2 and dist > 1 and player.shih >= ORDER_COSTS[OrderType.CHARGE]:
+                if dist <= 2 and dist > 1 and _can_order(force, player, OrderType.CHARGE):
                     orders.append(Order(OrderType.CHARGE, force, target_hex=sovereign_pos))
                     continue
                 best = _move_toward(force, sovereign_pos, game_state)
@@ -534,7 +543,7 @@ class SovereignHunterStrategy(Strategy):
                 if enemy.id in player.known_enemy_powers:
                     known_power = player.known_enemy_powers[enemy.id]
                     if force.power and known_power > force.power:
-                        if player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
+                        if _can_order(force, player, OrderType.FORTIFY):
                             orders.append(Order(OrderType.FORTIFY, force))
                         else:
                             best = _move_toward(force, center, game_state)
@@ -547,7 +556,7 @@ class SovereignHunterStrategy(Strategy):
 
             # Scout unscouted enemies
             unscouted = [e for e in enemies_near if e.id not in player.known_enemy_powers]
-            if unscouted and player.shih >= ORDER_COSTS[OrderType.SCOUT]:
+            if unscouted and _can_order(force, player, OrderType.SCOUT):
                 orders.append(Order(OrderType.SCOUT, force, scout_target_id=unscouted[0].id))
                 continue
 
@@ -557,7 +566,7 @@ class SovereignHunterStrategy(Strategy):
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
-            else:
+            elif _can_order(force, player, OrderType.FORTIFY):
                 orders.append(Order(OrderType.FORTIFY, force))
 
         return orders
@@ -598,7 +607,7 @@ class BlitzerStrategy(Strategy):
             if sovereign_pos and force.power and force.power >= 4:
                 dist = hex_distance(force.position[0], force.position[1],
                                    sovereign_pos[0], sovereign_pos[1])
-                if dist <= 2 and player.shih >= ORDER_COSTS[OrderType.CHARGE]:
+                if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
                     orders.append(Order(OrderType.CHARGE, force, target_hex=sovereign_pos))
                     continue
                 else:
@@ -609,7 +618,7 @@ class BlitzerStrategy(Strategy):
 
             # Scout unscouted enemies
             unscouted = [e for e in enemies_near if e.id not in player.known_enemy_powers]
-            if unscouted and player.shih >= ORDER_COSTS[OrderType.SCOUT]:
+            if unscouted and _can_order(force, player, OrderType.SCOUT):
                 orders.append(Order(OrderType.SCOUT, force, scout_target_id=unscouted[0].id))
                 continue
 
@@ -619,9 +628,8 @@ class BlitzerStrategy(Strategy):
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
-            else:
-                if player.shih >= ORDER_COSTS[OrderType.FORTIFY]:
-                    orders.append(Order(OrderType.FORTIFY, force))
+            elif _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
         return orders
 
 

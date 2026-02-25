@@ -1,4 +1,4 @@
-"""Tests for v4 combat resolution: power values + variance + ambush + support + retreat."""
+"""Tests for v5 combat resolution: power values + variance + ambush + charge + support + retreat."""
 
 import pytest
 import random
@@ -10,8 +10,8 @@ from models import Force, Player, Hex
 
 def make_combat_state():
     """Create a minimal game state for combat testing."""
-    p1 = Player(id='p1', shih=5, max_shih=8)
-    p2 = Player(id='p2', shih=5, max_shih=8)
+    p1 = Player(id='p1', shih=6, max_shih=10)
+    p2 = Player(id='p2', shih=6, max_shih=10)
     game = GameState(
         game_id='test', turn=1, phase='resolve',
         players=[p1, p2],
@@ -50,7 +50,7 @@ class TestEffectivePower:
         f = Force(id='p1_f1', position=(3, 3), power=2, ambushing=True)
         game.players[0].add_force(f)
         power = calculate_effective_power(f, game, is_defender=True, apply_variance=False)
-        assert power == 4  # 2 base + 2 ambush
+        assert power == 3  # 2 base + 1 ambush
 
     def test_ambush_no_bonus_for_attacker(self):
         game = make_combat_state()
@@ -71,32 +71,30 @@ class TestEffectivePower:
         f = Force(id='p1_f1', position=(3, 4), power=1, fortified=True, ambushing=True)
         game.players[0].add_force(f)
         power = calculate_effective_power(f, game, is_defender=True, hex_pos=(3, 4), apply_variance=False)
-        # 1 base + 2 fortify + 2 ambush + 1 difficult = 6
-        assert power == 6
+        # 1 base + 2 fortify + 1 ambush + 1 difficult = 5
+        assert power == 5
 
-    def test_variance_adds_plus_or_minus_1(self):
+    def test_variance_in_range(self):
         game = make_combat_state()
         f = Force(id='p1_f1', position=(3, 3), power=3)
         game.players[0].add_force(f)
         rng = random.Random(42)
         power = calculate_effective_power(f, game, apply_variance=True, rng=rng)
-        assert power in [2, 4]  # 3 +/- 1
+        assert power in [1, 2, 3, 4, 5]  # 3 + variance(-2..+2)
 
 
 class TestCombatResolution:
     def test_higher_power_wins(self):
+        """Power 5 vs 1 — attacker should always win (kill or retreat the defender)."""
         game = make_combat_state()
         att = Force(id='p1_f1', position=(3, 3), power=5)
         dfd = Force(id='p2_f1', position=(4, 3), power=1)
         game.players[0].add_force(att)
         game.players[1].add_force(dfd)
 
-        # Use a fixed RNG where both get +1, so 6 vs 2
         rng = random.Random(100)
         result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
-        # With big power difference, attacker should win regardless of variance
-        assert result['outcome'] == 'attacker_wins'
-        assert dfd.alive is False
+        assert 'attacker_wins' in result['outcome']
         assert att.position == (4, 3)
 
     def test_combat_reveals_both_powers(self):
@@ -126,40 +124,44 @@ class TestCombatResolution:
         assert p2.known_enemy_powers['p1_f1'] == 5
 
     def test_sovereign_capture(self):
-        game = make_combat_state()
-        att = Force(id='p1_f1', position=(3, 3), power=5)
-        dfd = Force(id='p2_f1', position=(4, 3), power=1)  # Sovereign
-        game.players[0].add_force(att)
-        game.players[1].add_force(dfd)
-
-        # Use RNG that gives both +1 — 6 vs 2, attacker wins
-        rng = random.Random(100)
-        result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
-        assert result['sovereign_captured'] is not None
-        assert result['sovereign_captured']['winner'] == 'p1'
-        assert result['sovereign_captured']['loser'] == 'p2'
+        """Power 5 vs Sovereign (1): sovereign should be killable across trials."""
+        captured = False
+        for seed in range(20):
+            game = make_combat_state()
+            att = Force(id='p1_f1', position=(3, 3), power=5)
+            dfd = Force(id='p2_f1', position=(4, 3), power=1)  # Sovereign
+            game.players[0].add_force(att)
+            game.players[1].add_force(dfd)
+            rng = random.Random(seed)
+            result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
+            if result['sovereign_captured'] is not None:
+                assert result['sovereign_captured']['winner'] == 'p1'
+                assert result['sovereign_captured']['loser'] == 'p2'
+                captured = True
+                break
+        assert captured, "Power 5 never captured Sovereign across 20 trials"
 
     def test_fortified_defender_wins(self):
         game = make_combat_state()
-        att = Force(id='p1_f1', position=(3, 3), power=2)
-        dfd = Force(id='p2_f1', position=(4, 3), power=2, fortified=True)  # 2+2=4
+        att = Force(id='p1_f1', position=(3, 3), power=1)
+        dfd = Force(id='p2_f1', position=(4, 3), power=3, fortified=True)  # 3+2=5
         game.players[0].add_force(att)
         game.players[1].add_force(dfd)
 
-        # Use RNG that gives both +1 — 3 vs 5, defender wins
+        # Base: att=1 vs def=5 (3+fortify). Diff=4. Defender wins even with worst variance swing.
         rng = random.Random(100)
         result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
-        assert result['outcome'] == 'defender_wins'
+        assert result['outcome'] in ('defender_wins', 'defender_wins_retreat')
 
     def test_ambush_defender_bonus(self):
-        """Ambushing defender with power 1 gets +2, making effective 3 vs attacker power 2."""
+        """Ambushing defender with power 2 gets +1, making effective 3 vs attacker power 1."""
         game = make_combat_state()
-        att = Force(id='p1_f1', position=(3, 3), power=2)
-        dfd = Force(id='p2_f1', position=(4, 3), power=1, ambushing=True)  # 1+2=3
+        att = Force(id='p1_f1', position=(3, 3), power=1)
+        dfd = Force(id='p2_f1', position=(4, 3), power=2, ambushing=True)  # 2+1=3
         game.players[0].add_force(att)
         game.players[1].add_force(dfd)
 
-        # Use RNG that gives both +1 — 3 vs 4, defender wins
+        # Base: att=1 vs def=3 (2+ambush). Diff=2. Even with worst variance swing, defender favored.
         rng = random.Random(100)
         result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
         assert result['outcome'] in ('defender_wins', 'defender_wins_retreat')
@@ -271,18 +273,20 @@ class TestRetreatMechanic:
         assert dfd.position != (4, 3)  # Retreated away from combat hex
 
     def test_decisive_combat_kills_loser(self):
-        """When power diff > 1, loser is eliminated (no retreat)."""
-        game = make_combat_state()
-        att = Force(id='p1_f1', position=(3, 3), power=5)
-        dfd = Force(id='p2_f1', position=(4, 3), power=1)
-        game.players[0].add_force(att)
-        game.players[1].add_force(dfd)
-
-        # Power 5 vs 1 with both +1 → 6 vs 2, diff=4 → decisive kill
-        rng = random.Random(100)
-        result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
-        assert result['outcome'] == 'attacker_wins'
-        assert dfd.alive is False
+        """When power diff > retreat_threshold (2), loser is eliminated."""
+        killed = False
+        for seed in range(20):
+            game = make_combat_state()
+            att = Force(id='p1_f1', position=(3, 3), power=5)
+            dfd = Force(id='p2_f1', position=(4, 3), power=1)
+            game.players[0].add_force(att)
+            game.players[1].add_force(dfd)
+            rng = random.Random(seed)
+            result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
+            if result['outcome'] == 'attacker_wins' and not dfd.alive:
+                killed = True
+                break
+        assert killed, "Power 5 vs 1 never produced a decisive kill across 20 trials"
 
     def test_close_combat_attacker_retreats_alive(self):
         """When defender wins by <= 1 power diff, attacker retreats alive."""

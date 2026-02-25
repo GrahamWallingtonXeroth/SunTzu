@@ -1,16 +1,21 @@
 """
-Order processing for The Unfought Battle v4.
+Order processing for The Unfought Battle v5.
 
-Five orders. Movement is free. Everything else costs momentum.
+Five orders. Movement is free. Special orders require supply lines.
 
-Move    — 0 Shih. Go to an adjacent non-Scorched hex.
-Charge  — 1 Shih. Move up to 2 hexes. Fast strike for timing and surprise.
-Scout   — 2 Shih. Stay put. Learn the power of one enemy force within 2 hexes. Secret.
-Fortify — 2 Shih. Stay put. +2 combat power this turn.
-Ambush  — 2 Shih. Stay put. If an enemy moves to your hex or adjacent hex this turn,
-          +2 power in the resulting combat. The opponent doesn't know you ambushed.
+Move    — 0 Shih. Go to an adjacent non-Scorched hex. Always available.
+Charge  — 1 Shih. Move up to 2 hexes. +1 attack if entering combat. Requires supply.
+Scout   — 1 Shih. Stay put. Learn one enemy's power within 2 hexes. Requires supply.
+Fortify — 1 Shih. Stay put. +2 combat power this turn. Requires supply.
+Ambush  — 2 Shih. Stay put. +1 power when defending. Hidden. Requires supply.
+
+Supply: A force has supply if it is within 3 hexes of the Sovereign, or within
+3 hexes of a friendly force that has supply (forming a chain). Forces without
+supply can only Move.
 """
 
+import json
+import os
 from enum import Enum
 from typing import Optional, Tuple, List, Dict, Any
 from models import Force
@@ -26,14 +31,40 @@ class OrderType(Enum):
     CHARGE = "Charge"
 
 
-# Shih costs
-ORDER_COSTS = {
-    OrderType.MOVE: 0,
-    OrderType.SCOUT: 2,
-    OrderType.FORTIFY: 2,
-    OrderType.AMBUSH: 2,
-    OrderType.CHARGE: 1,
-}
+def _load_order_config() -> Dict:
+    """Load order-related config."""
+    defaults = {
+        'scout_cost': 1,
+        'fortify_cost': 1,
+        'ambush_cost': 2,
+        'charge_cost': 1,
+        'supply_range': 3,
+    }
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            for k in defaults:
+                if k in config:
+                    defaults[k] = config[k]
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return defaults
+
+
+def _build_order_costs() -> Dict['OrderType', int]:
+    """Build ORDER_COSTS from config."""
+    cfg = _load_order_config()
+    return {
+        OrderType.MOVE: 0,
+        OrderType.SCOUT: cfg['scout_cost'],
+        OrderType.FORTIFY: cfg['fortify_cost'],
+        OrderType.AMBUSH: cfg['ambush_cost'],
+        OrderType.CHARGE: cfg['charge_cost'],
+    }
+
+
+ORDER_COSTS = _build_order_costs()
 
 
 class Order:
@@ -66,6 +97,51 @@ def within_range(pos1: Tuple[int, int], pos2: Tuple[int, int], max_range: int) -
     return hex_distance(pos1[0], pos1[1], pos2[0], pos2[1]) <= max_range
 
 
+def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3) -> bool:
+    """
+    Check if a force has supply.
+
+    A force has supply if:
+    1. It IS the Sovereign, or
+    2. It can be reached via a chain of friendly alive forces back to the Sovereign,
+       where each link in the chain is within supply_range hexes.
+
+    Uses BFS from the Sovereign outward.
+    """
+    if force.power == 1:  # Is the Sovereign
+        return True
+
+    alive_forces = [f for f in player_forces if f.alive]
+
+    # Find the Sovereign
+    sovereign = None
+    for f in alive_forces:
+        if f.power == 1:
+            sovereign = f
+            break
+
+    if sovereign is None:
+        return False  # Sovereign dead = no supply for anyone
+
+    # BFS: start from Sovereign, spread supply through chain
+    supplied = {sovereign.id}
+    queue = [sovereign]
+
+    while queue:
+        current = queue.pop(0)
+        for f in alive_forces:
+            if f.id not in supplied:
+                dist = hex_distance(
+                    current.position[0], current.position[1],
+                    f.position[0], f.position[1]
+                )
+                if dist <= supply_range:
+                    supplied.add(f.id)
+                    queue.append(f)
+
+    return force.id in supplied
+
+
 def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
     """Validate an order. Raises OrderValidationError if invalid."""
     player = game_state.get_player_by_id(player_id)
@@ -83,6 +159,15 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
         raise OrderValidationError(
             f"Insufficient Shih: have {player.shih}, need {cost} for {order.order_type.value}"
         )
+
+    # Supply check: special orders require supply line to Sovereign
+    if order.order_type in (OrderType.SCOUT, OrderType.FORTIFY, OrderType.AMBUSH, OrderType.CHARGE):
+        cfg = _load_order_config()
+        supply_range = cfg['supply_range']
+        if not has_supply(force, player.forces, supply_range):
+            raise OrderValidationError(
+                f"Force {force.id} has no supply line to Sovereign — can only Move"
+            )
 
     if order.order_type == OrderType.MOVE:
         if not order.target_hex:
@@ -150,9 +235,9 @@ def resolve_orders(
     2. Apply Fortify markers
     3. Apply Ambush markers
     4. Process Moves and Charges simultaneously — detect collisions
-    5. Resolve combats at contested hexes (ambush bonus applies here)
+    5. Resolve combats at contested hexes (ambush/charge bonuses apply)
     6. Apply Scout revelations
-    7. Clear Fortify/Ambush markers at end of next resolution
+    7. Clear Fortify/Ambush/Charging markers at end of next resolution
 
     Returns a results dict with combats, scout results, and errors.
     """
@@ -166,11 +251,12 @@ def resolve_orders(
 
     all_orders = [(o, 'p1') for o in p1_orders] + [(o, 'p2') for o in p2_orders]
 
-    # Reset fortified/ambushing status from last turn
+    # Reset fortified/ambushing/charging status from last turn
     for player in game_state.players:
         for force in player.get_alive_forces():
             force.fortified = False
             force.ambushing = False
+            force.charging = False
 
     # Phase 1: Deduct Shih and validate
     valid_orders: List[tuple] = []
@@ -232,6 +318,8 @@ def resolve_orders(
                 'defender_player': 'p2',
                 'hex': target,
                 'type': 'collision',
+                'attacker_charging': p1_mover[0].order_type == OrderType.CHARGE,
+                'defender_charging': p2_mover[0].order_type == OrderType.CHARGE,
             })
             moved_force_ids.add(p1_mover[0].force.id)
             moved_force_ids.add(p2_mover[0].force.id)
@@ -250,6 +338,7 @@ def resolve_orders(
                             'defender_player': occ_owner.id,
                             'hex': target,
                             'type': 'assault',
+                            'attacker_charging': order.order_type == OrderType.CHARGE,
                         })
                         moved_force_ids.add(order.force.id)
                     else:
@@ -277,6 +366,12 @@ def resolve_orders(
     # Phase 5: Resolve Combats
     from resolution import resolve_combat
     for combat in combats:
+        # Set charging flags before combat resolution
+        if combat.get('attacker_charging'):
+            combat['attacker'].charging = True
+        if combat.get('defender_charging'):
+            combat['defender'].charging = True
+
         combat_result = resolve_combat(
             combat['attacker'], combat['attacker_player'],
             combat['defender'], combat['defender_player'],

@@ -75,13 +75,14 @@ class GameState:
 def load_config() -> Dict:
     """Load game configuration with defaults."""
     defaults = {
-        'starting_shih': 4,
-        'max_shih': 8,
+        'starting_shih': 6,
+        'max_shih': 10,
         'force_count': 5,
         'board_size': 7,
         'visibility_range': 2,
-        'shrink_interval': 3,
+        'shrink_interval': 6,
         'scout_range': 2,
+        'supply_range': 3,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -223,6 +224,8 @@ def get_player_view(game_state: GameState, player_id: str) -> Dict:
         return {}
 
     # Your forces: full information
+    from orders import has_supply
+    supply_range = config.get('supply_range', 3)
     own_forces = []
     for f in player.get_alive_forces():
         own_forces.append({
@@ -231,6 +234,7 @@ def get_player_view(game_state: GameState, player_id: str) -> Dict:
             'power': f.power,
             'revealed': f.revealed,
             'fortified': f.fortified,
+            'has_supply': has_supply(f, player.forces, supply_range),
         })
 
     # Enemy forces: only those within visibility range

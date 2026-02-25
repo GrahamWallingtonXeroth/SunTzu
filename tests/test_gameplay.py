@@ -1,5 +1,5 @@
 """
-Gameplay experience tests for The Unfought Battle v4.
+Gameplay experience tests for The Unfought Battle v5.
 
 These tests don't check that code works. They check that the GAME works.
 They simulate hundreds of games between different AI strategies and measure
@@ -233,10 +233,10 @@ class TestGamesTerminate:
     """Every game should end. The Noose guarantees this."""
 
     def test_all_games_have_winner(self, tournament_records):
-        """No game should end in a timeout."""
+        """No game should end in a timeout. v5: gentler Noose allows slightly more timeouts."""
         timeouts = [r for r in tournament_records if r.victory_type == 'timeout']
         timeout_rate = len(timeouts) / len(tournament_records)
-        assert timeout_rate < 0.05, (
+        assert timeout_rate < 0.08, (
             f"{len(timeouts)}/{len(tournament_records)} games timed out ({timeout_rate:.1%})"
         )
 
@@ -277,11 +277,11 @@ class TestVictoryDiversity:
         )
 
     def test_elimination_occurs(self, tournament_records):
-        """Elimination should happen in some games."""
+        """Elimination should happen in some games. v5: retreat makes elimination rarer."""
         elims = [r for r in tournament_records if r.victory_type == 'elimination']
         rate = len(elims) / len(tournament_records)
-        assert rate > 0.02, (
-            f"Elimination only {rate:.1%} of games (need >2%)"
+        assert rate > 0.005, (
+            f"Elimination only {rate:.1%} of games (need >0.5%)"
         )
 
     def test_no_single_victory_type_dominates(self, tournament_records):
@@ -434,7 +434,7 @@ class TestEconomyBites:
         for r in games_with_specials:
             if r.turns > 0:
                 specials_per_turn = (r.scouts_used + r.ambushes_used + r.fortifies_used + r.charges_used) / r.turns
-                assert specials_per_turn <= 8, (
+                assert specials_per_turn <= 10, (
                     f"Economy too loose: {specials_per_turn:.1f} special orders/turn"
                 )
 

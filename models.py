@@ -42,6 +42,7 @@ class Force:
     alive: bool = True
     fortified: bool = False            # True for this turn only if Fortify order given
     ambushing: bool = False            # True for this turn only if Ambush order given
+    charging: bool = False             # True for this turn only if Charge order given
 
     @property
     def is_sovereign(self) -> bool:

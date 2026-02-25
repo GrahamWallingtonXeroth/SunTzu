@@ -1,4 +1,4 @@
-"""Tests for v4 order processing: Move, Scout, Fortify, Ambush, Charge."""
+"""Tests for v5 order processing: Move, Scout, Fortify, Ambush, Charge + supply lines."""
 
 import pytest
 from state import initialize_game, apply_deployment, GameState
@@ -54,11 +54,11 @@ class TestOrderCosts:
     def test_move_is_free(self):
         assert ORDER_COSTS[OrderType.MOVE] == 0
 
-    def test_scout_costs_2(self):
-        assert ORDER_COSTS[OrderType.SCOUT] == 2
+    def test_scout_costs_1(self):
+        assert ORDER_COSTS[OrderType.SCOUT] == 1
 
-    def test_fortify_costs_2(self):
-        assert ORDER_COSTS[OrderType.FORTIFY] == 2
+    def test_fortify_costs_1(self):
+        assert ORDER_COSTS[OrderType.FORTIFY] == 1
 
     def test_ambush_costs_2(self):
         assert ORDER_COSTS[OrderType.AMBUSH] == 2
@@ -123,7 +123,7 @@ class TestScoutValidation:
 
     def test_scout_insufficient_shih(self, game):
         p1 = game.get_player_by_id('p1')
-        p1.shih = 1  # Need 2 for scout
+        p1.shih = 0  # Need 1 for scout
         p2 = game.get_player_by_id('p2')
         p2.forces[0].position = (1, 0)
         force = p1.forces[0]
@@ -214,7 +214,7 @@ class TestOrderResolution:
         old_shih = p1.shih
         p1_orders = [Order(OrderType.FORTIFY, force)]
         resolve_orders(p1_orders, [], game)
-        assert p1.shih == old_shih - 2
+        assert p1.shih == old_shih - 1
 
     def test_ambush_sets_flag(self, game):
         p1 = game.get_player_by_id('p1')

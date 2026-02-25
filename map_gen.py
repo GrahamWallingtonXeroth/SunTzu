@@ -36,14 +36,15 @@ def max_distance_for_shrink_stage(stage: int) -> int:
     """
     Return the maximum allowed distance from center for a given shrink stage.
     Stage 0: full board (max distance 6 — all hexes reachable)
-    Stage 1: distance <= 4
-    Stage 2: distance <= 3
-    Stage 3: distance <= 2
-    Stage 4+: distance <= 1
+    Stage 1: distance <= 5 (only far corners scorched)
+    Stage 2: distance <= 4
+    Stage 3: distance <= 3
+    Stage 4: distance <= 2
+    Stage 5+: distance <= 1
     """
     if stage <= 0:
         return BOARD_SIZE  # No shrinking
-    limits = {1: 4, 2: 3, 3: 2}
+    limits = {1: 5, 2: 4, 3: 3, 4: 2}
     return limits.get(stage, 1)
 
 

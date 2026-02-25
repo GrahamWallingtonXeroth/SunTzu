@@ -53,17 +53,20 @@ class TestShrinkStages:
         assert max_distance_for_shrink_stage(0) == BOARD_SIZE
 
     def test_stage_1_limits(self):
-        assert max_distance_for_shrink_stage(1) == 4
+        assert max_distance_for_shrink_stage(1) == 5
 
     def test_stage_2_limits(self):
-        assert max_distance_for_shrink_stage(2) == 3
+        assert max_distance_for_shrink_stage(2) == 4
 
     def test_stage_3_limits(self):
-        assert max_distance_for_shrink_stage(3) == 2
+        assert max_distance_for_shrink_stage(3) == 3
 
-    def test_stage_4_plus(self):
-        assert max_distance_for_shrink_stage(4) == 1
+    def test_stage_4_limits(self):
+        assert max_distance_for_shrink_stage(4) == 2
+
+    def test_stage_5_plus(self):
         assert max_distance_for_shrink_stage(5) == 1
+        assert max_distance_for_shrink_stage(6) == 1
 
     def test_is_scorched_stage_0(self):
         assert is_scorched(0, 0, 0) is False

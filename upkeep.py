@@ -1,13 +1,10 @@
 """
-Upkeep for The Unfought Battle v3.
+Upkeep for The Unfought Battle v5.
 
 After orders resolve, the board settles. Resources flow. The game checks
 whether anyone has won — not through combat, but through position.
 
-v3 changes:
-- Shrinking board: every shrink_interval turns, outer ring becomes Scorched
-- Domination: control 2 of 3 Contentious hexes for 3 consecutive turns
-- Tighter economy: base income 1, contentious bonus 2
+v5: Noose fires every 6 turns (gentler first shrink).
 
 Victory conditions, in order of glory:
 1. Sovereign Capture — you found and destroyed the power-1 force. Decisive.
@@ -29,8 +26,8 @@ def load_upkeep_config() -> Dict:
         'contentious_shih_bonus': 2,
         'domination_turns_required': 3,
         'domination_hexes_required': 2,
-        'max_shih': 8,
-        'shrink_interval': 3,
+        'max_shih': 10,
+        'shrink_interval': 6,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:

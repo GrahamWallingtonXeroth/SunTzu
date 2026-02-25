@@ -1,14 +1,14 @@
 """
-Combat resolution for The Unfought Battle v4.
+Combat resolution for The Unfought Battle v5.
 
 Combat is decisive but not always lethal. Both power values are revealed
 permanently — even winning costs you the secrecy that was protecting you.
 
-v4 changes:
-- Support bonus: +1 per adjacent friendly force, max +2
-- Close combat retreat: losers survive (retreat) when power difference ≤ 1
-- Ambush bonus reduced: +2 (was +3)
-- A revealed power-5 can be avoided. A revealed power-1 (Sovereign) can be hunted.
+v5 changes:
+- Ambush bonus reduced to +1 (was +2). Ambusher revealed after combat.
+- Charge attack bonus: +1 when charging into combat.
+- Combat variance widened: -2 to +2 (was -1/+1).
+- Retreat threshold raised to 2: losers survive when power diff ≤ 2.
 """
 
 import json
@@ -26,10 +26,11 @@ def load_combat_config() -> Dict:
     defaults = {
         'fortify_bonus': 2,
         'difficult_defense_bonus': 1,
-        'ambush_bonus': 2,
+        'ambush_bonus': 1,
+        'charge_attack_bonus': 1,
         'support_bonus': 1,
         'max_support_bonus': 2,
-        'retreat_threshold': 1,
+        'retreat_threshold': 2,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -57,10 +58,11 @@ def calculate_effective_power(
 
     Base power (assigned value 1-5)
     + 2 if fortified this turn
-    + 2 if ambushing and defending
+    + 1 if ambushing and defending
+    + 1 if charging and attacking
     + 1 if defending on Difficult terrain
     + 1 per adjacent friendly force (max +2) — support bonus
-    + random(-1, +1) combat variance (coin flip)
+    + random(-2, -1, 0, +1, +2) combat variance
     """
     config = load_combat_config()
     power = force.power if force.power is not None else 0
@@ -72,6 +74,10 @@ def calculate_effective_power(
     # Ambush bonus: only if this force is ambushing AND is the defender
     if force.ambushing and is_defender:
         power += config['ambush_bonus']
+
+    # Charge attack bonus: only if this force is charging AND is the attacker
+    if force.charging and not is_defender:
+        power += config['charge_attack_bonus']
 
     # Difficult terrain defense bonus
     if is_defender and hex_pos:
@@ -92,10 +98,10 @@ def calculate_effective_power(
             config['max_support_bonus']
         )
 
-    # Combat variance: +1 or -1 randomly
+    # Combat variance: -2 to +2
     if apply_variance:
         r = rng if rng else random
-        power += r.choice([-1, 1])
+        power += r.choice([-2, -1, 0, 1, 2])
 
     return power
 

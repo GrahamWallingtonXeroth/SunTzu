@@ -1,4 +1,4 @@
-"""Tests for v4 game state management, initialization, and deployment."""
+"""Tests for v5 game state management, initialization, and deployment."""
 
 import pytest
 from state import (
@@ -31,7 +31,7 @@ class TestInitialization:
 
     def test_players_start_with_shih(self, game):
         for player in game.players:
-            assert player.shih == 5
+            assert player.shih == 6
 
     def test_map_is_7x7(self, game):
         assert len(game.map_data) == 49  # 7x7
@@ -163,7 +163,7 @@ class TestPlayerView:
     def test_view_includes_shih(self, deployed_game):
         view = get_player_view(deployed_game, 'p1')
         assert 'your_shih' in view
-        assert view['your_shih'] == 5
+        assert view['your_shih'] == 6
 
     def test_scouted_powers_visible(self, deployed_game):
         p1 = deployed_game.get_player_by_id('p1')
