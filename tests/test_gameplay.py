@@ -54,7 +54,7 @@ KEY MEASURES FOR A BRILLIANT GAME
 import pytest
 import random
 from collections import Counter
-from typing import List
+from typing import List, Dict
 
 import sys
 import os
@@ -675,3 +675,222 @@ class TestGameComplexity:
             assert 0.30 < p1_rate < 0.70, (
                 f"P1 wins {p1_rate:.1%} — significant first-mover advantage"
             )
+
+
+# ===========================================================================
+# GAME THEORY ANALYSIS — Formal verification of strategic depth
+# ===========================================================================
+
+def _build_payoff_matrix(records: List[GameRecord]) -> Dict:
+    """
+    Build a symmetric win-rate matrix from tournament records.
+
+    Returns:
+        {
+            'strategies': ['random', 'aggressive', ...],
+            'matrix': [[float]],  # W[i][j] = win rate of strategy i vs strategy j
+        }
+    """
+    names = [s.name for s in ALL_STRATEGIES]
+    n = len(names)
+    idx = {name: i for i, name in enumerate(names)}
+
+    wins = [[0] * n for _ in range(n)]
+    games = [[0] * n for _ in range(n)]
+
+    for r in records:
+        i = idx.get(r.p1_strategy)
+        j = idx.get(r.p2_strategy)
+        if i is None or j is None:
+            continue
+        games[i][j] += 1
+        games[j][i] += 1
+        if r.winner == 'p1':
+            wins[i][j] += 1
+        elif r.winner == 'p2':
+            wins[j][i] += 1
+
+    matrix = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                matrix[i][j] = 0.5
+            elif games[i][j] > 0:
+                matrix[i][j] = wins[i][j] / games[i][j]
+            else:
+                matrix[i][j] = 0.5
+    return {'strategies': names, 'matrix': matrix}
+
+
+def _replicator_step(freqs: List[float], matrix: List[List[float]], dt: float = 0.1) -> List[float]:
+    """One step of replicator dynamics: dx_i/dt = x_i * (f_i - f_avg)."""
+    n = len(freqs)
+    # Compute fitness: f_i = sum_j(W[i][j] * freq[j])
+    fitness = [0.0] * n
+    for i in range(n):
+        for j in range(n):
+            fitness[i] += matrix[i][j] * freqs[j]
+
+    avg_fitness = sum(fitness[i] * freqs[i] for i in range(n))
+
+    new_freqs = [0.0] * n
+    for i in range(n):
+        new_freqs[i] = freqs[i] + dt * freqs[i] * (fitness[i] - avg_fitness)
+        new_freqs[i] = max(new_freqs[i], 0.0)
+
+    total = sum(new_freqs)
+    if total > 0:
+        new_freqs = [f / total for f in new_freqs]
+    return new_freqs
+
+
+@pytest.fixture(scope="module")
+def payoff_data(tournament_records):
+    """Payoff matrix derived from tournament. Cached for module."""
+    return _build_payoff_matrix(tournament_records)
+
+
+class TestGameTheoryProperties:
+    """
+    Formal game theory tests using the tournament payoff matrix.
+
+    These tests apply concepts from game theory (dominant strategies,
+    Nash equilibrium, replicator dynamics, intransitivity) to verify
+    that the game has genuine strategic depth -- not just surface variety.
+
+    A well-designed game should:
+    - Have NO strictly dominant strategy (no "always correct" choice)
+    - Exhibit intransitive cycles (rock-paper-scissors dynamics)
+    - Converge to a mixed equilibrium under replicator dynamics
+    - Have sufficient strategic differentiation in the payoff matrix
+    """
+
+    def test_no_strictly_dominant_strategy(self, payoff_data):
+        """No strategy should beat every other strategy more than 50% of the time.
+
+        A strictly dominant strategy makes the game trivially solvable.
+        Good games have rock-paper-scissors dynamics, not a hierarchy."""
+        matrix = payoff_data['matrix']
+        names = payoff_data['strategies']
+        n = len(names)
+
+        for i in range(n):
+            opponents_beaten = sum(
+                1 for j in range(n) if j != i and matrix[i][j] > 0.5
+            )
+            assert opponents_beaten < n - 1, (
+                f"'{names[i]}' is strictly dominant: beats {opponents_beaten}/{n-1} "
+                f"opponents. Win rates: "
+                + ", ".join(f"vs {names[j]}={matrix[i][j]:.2f}"
+                           for j in range(n) if j != i)
+            )
+
+    def test_intransitive_cycles_exist(self, payoff_data):
+        """The top strategies should exhibit rock-paper-scissors cycles.
+
+        If A > B > C > A exists among the top strategies, no single strategy
+        can dominate the metagame -- players must adapt to opponents."""
+        matrix = payoff_data['matrix']
+        names = payoff_data['strategies']
+        n = len(names)
+
+        # Compute overall win rate for each strategy to find the top tier
+        overall = []
+        for i in range(n):
+            avg_wr = sum(matrix[i][j] for j in range(n) if j != i) / (n - 1)
+            overall.append((avg_wr, i))
+        overall.sort(reverse=True)
+
+        # Take the top 5 strategies
+        top_k = min(5, n)
+        top_indices = [idx for _, idx in overall[:top_k]]
+
+        # Search for any 3-cycle: W[a][b] > 0.5, W[b][c] > 0.5, W[c][a] > 0.5
+        found_cycle = False
+        for a in top_indices:
+            for b in top_indices:
+                if b == a or matrix[a][b] <= 0.5:
+                    continue
+                for c in top_indices:
+                    if c == a or c == b:
+                        continue
+                    if matrix[b][c] > 0.5 and matrix[c][a] > 0.5:
+                        found_cycle = True
+                        break
+                if found_cycle:
+                    break
+            if found_cycle:
+                break
+
+        assert found_cycle, (
+            f"No intransitive cycle found among top {top_k} strategies "
+            f"({', '.join(names[i] for i in top_indices)}). "
+            f"The metagame has a total ordering -- one strategy dominates."
+        )
+
+    def test_replicator_dynamics_mixed_equilibrium(self, payoff_data):
+        """Replicator dynamics should converge to a mixed equilibrium.
+
+        Starting from uniform strategy frequencies, simulating evolutionary
+        pressure should NOT drive all population to a single strategy.
+        At least 2 strategies should survive with >1% frequency."""
+        matrix = payoff_data['matrix']
+        n = len(matrix)
+
+        # Start from uniform distribution
+        freqs = [1.0 / n] * n
+
+        # Run replicator dynamics for 2000 steps
+        for _ in range(2000):
+            freqs = _replicator_step(freqs, matrix, dt=0.05)
+
+        # Count surviving strategies (frequency > 1%)
+        names = payoff_data['strategies']
+        survivors = [(names[i], freqs[i]) for i in range(n) if freqs[i] > 0.01]
+        max_freq = max(freqs)
+        max_name = names[freqs.index(max_freq)]
+
+        assert len(survivors) >= 2, (
+            f"Replicator dynamics converged to only {len(survivors)} strategy(ies). "
+            f"Survivors: {survivors}. "
+            f"A well-balanced game should sustain at least 2 viable strategies."
+        )
+        assert max_freq < 0.90, (
+            f"'{max_name}' dominates with {max_freq:.1%} of the evolved population. "
+            f"The metagame is not balanced."
+        )
+
+    def test_payoff_matrix_differentiation(self, payoff_data):
+        """Strategy matchups should be meaningfully differentiated.
+
+        The payoff matrix should not be nearly uniform (all ~50/50).
+        Strategies should have distinct strengths and weaknesses."""
+        matrix = payoff_data['matrix']
+        names = payoff_data['strategies']
+        n = len(names)
+
+        # Collect all off-diagonal win rates
+        off_diagonal = []
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    off_diagonal.append(matrix[i][j])
+
+        mean_wr = sum(off_diagonal) / len(off_diagonal)
+        variance = sum((x - mean_wr) ** 2 for x in off_diagonal) / len(off_diagonal)
+        std_dev = variance ** 0.5
+
+        assert std_dev > 0.05, (
+            f"Payoff matrix std dev is only {std_dev:.3f} -- "
+            f"strategies are too similar (mean win rate: {mean_wr:.3f}). "
+            f"The game needs more strategic differentiation."
+        )
+
+        # At least some matchups should be strongly asymmetric
+        strong_matchups = sum(1 for x in off_diagonal if x > 0.65 or x < 0.35)
+        strong_fraction = strong_matchups / len(off_diagonal)
+
+        assert strong_fraction > 0.10, (
+            f"Only {strong_fraction:.1%} of matchups are strongly asymmetric "
+            f"(win rate >65% or <35%). Need >10% for meaningful counter-play."
+        )
