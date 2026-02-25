@@ -75,12 +75,12 @@ class GameState:
 def load_config() -> Dict:
     """Load game configuration with defaults."""
     defaults = {
-        'starting_shih': 5,
-        'max_shih': 10,
+        'starting_shih': 4,
+        'max_shih': 8,
         'force_count': 5,
         'board_size': 7,
         'visibility_range': 2,
-        'shrink_interval': 4,
+        'shrink_interval': 3,
         'scout_range': 2,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')

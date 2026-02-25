@@ -9,8 +9,8 @@ from models import Force, Player, Hex
 
 def make_combat_state():
     """Create a minimal game state for combat testing."""
-    p1 = Player(id='p1', shih=5, max_shih=10)
-    p2 = Player(id='p2', shih=5, max_shih=10)
+    p1 = Player(id='p1', shih=4, max_shih=8)
+    p2 = Player(id='p2', shih=4, max_shih=8)
     game = GameState(
         game_id='test', turn=1, phase='resolve',
         players=[p1, p2],

@@ -56,8 +56,8 @@ class TestOrderCosts:
     def test_scout_costs_3(self):
         assert ORDER_COSTS[OrderType.SCOUT] == 3
 
-    def test_fortify_costs_1(self):
-        assert ORDER_COSTS[OrderType.FORTIFY] == 1
+    def test_fortify_costs_2(self):
+        assert ORDER_COSTS[OrderType.FORTIFY] == 2
 
     def test_ambush_costs_2(self):
         assert ORDER_COSTS[OrderType.AMBUSH] == 2
@@ -210,7 +210,7 @@ class TestOrderResolution:
         old_shih = p1.shih
         p1_orders = [Order(OrderType.FORTIFY, force)]
         resolve_orders(p1_orders, [], game)
-        assert p1.shih == old_shih - 1
+        assert p1.shih == old_shih - 2
 
     def test_ambush_sets_flag(self, game):
         p1 = game.get_player_by_id('p1')

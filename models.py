@@ -58,8 +58,8 @@ class Player:
     know what you've scouted.
     """
     id: str
-    shih: int = 5
-    max_shih: int = 10
+    shih: int = 4
+    max_shih: int = 8
     forces: List[Force] = field(default_factory=list)
     deployed: bool = False
     known_enemy_powers: Dict[str, int] = field(default_factory=dict)

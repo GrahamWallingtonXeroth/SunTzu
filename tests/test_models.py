@@ -43,8 +43,8 @@ class TestForce:
 class TestPlayer:
     def test_create_player(self):
         p = Player(id='p1')
-        assert p.shih == 5
-        assert p.max_shih == 10
+        assert p.shih == 4
+        assert p.max_shih == 8
         assert p.deployed is False
         assert p.domination_turns == 0
         assert len(p.forces) == 0
@@ -75,9 +75,9 @@ class TestPlayer:
         assert alive[0].id == 'p1_f1'
 
     def test_update_shih_caps(self):
-        p = Player(id='p1', shih=5, max_shih=10)
+        p = Player(id='p1', shih=4, max_shih=8)
         p.update_shih(100)
-        assert p.shih == 10
+        assert p.shih == 8
         p.update_shih(-100)
         assert p.shih == 0
 

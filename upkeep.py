@@ -29,8 +29,8 @@ def load_upkeep_config() -> Dict:
         'contentious_shih_bonus': 2,
         'domination_turns_required': 3,
         'domination_hexes_required': 2,
-        'max_shih': 10,
-        'shrink_interval': 4,
+        'max_shih': 8,
+        'shrink_interval': 3,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:

@@ -8,8 +8,8 @@ from models import Player, Force, Hex, SOVEREIGN_POWER
 
 def make_upkeep_state():
     """Create a game state ready for upkeep testing."""
-    p1 = Player(id='p1', shih=5, max_shih=10)
-    p2 = Player(id='p2', shih=5, max_shih=10)
+    p1 = Player(id='p1', shih=4, max_shih=8)
+    p2 = Player(id='p2', shih=4, max_shih=8)
 
     # P1 forces with power values
     p1.add_force(Force(id='p1_f1', position=(3, 3), power=1))  # Sovereign
@@ -58,9 +58,9 @@ class TestShihIncome:
     def test_shih_caps_at_max(self):
         game = make_upkeep_state()
         p1 = game.get_player_by_id('p1')
-        p1.shih = 9  # Near max of 10
+        p1.shih = 7  # Near max of 8
         perform_upkeep(game)
-        assert p1.shih <= 10
+        assert p1.shih <= 8
 
     def test_higher_contentious_bonus(self):
         """In v3, each contentious hex gives +2 Shih."""
@@ -145,14 +145,14 @@ class TestBoardShrink:
     def test_shrink_at_interval(self):
         """Board shrinks at turn multiples of shrink_interval."""
         game = make_upkeep_state()
-        game.turn = 4  # shrink_interval = 4
+        game.turn = 3  # shrink_interval = 3
         assert game.shrink_stage == 0
         perform_upkeep(game)
         assert game.shrink_stage == 1
 
     def test_no_shrink_before_interval(self):
         game = make_upkeep_state()
-        game.turn = 3
+        game.turn = 2
         perform_upkeep(game)
         assert game.shrink_stage == 0
 
@@ -186,7 +186,7 @@ class TestBoardShrink:
         p2 = game.get_player_by_id('p2')
         p2.forces[0].position = (0, 0)  # Sovereign at far corner
         p2.forces[1].position = (3, 2)  # Other force safe
-        game.turn = 4
+        game.turn = 3  # shrink_interval = 3
         results = perform_upkeep(game)
         assert results['winner'] == 'p1'
         assert results['victory_type'] == 'sovereign_capture'

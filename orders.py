@@ -5,7 +5,7 @@ Four orders. Movement is free. Everything else costs momentum.
 
 Move    — 0 Shih. Go to an adjacent non-Scorched hex.
 Scout   — 3 Shih. Stay put. Learn the power of one enemy force within 2 hexes. Secret.
-Fortify — 1 Shih. Stay put. +2 combat power this turn.
+Fortify — 2 Shih. Stay put. +2 combat power this turn.
 Ambush  — 2 Shih. Stay put. If an enemy moves to your hex or adjacent hex this turn,
           +3 power in the resulting combat. The opponent doesn't know you ambushed.
 """
@@ -28,7 +28,7 @@ class OrderType(Enum):
 ORDER_COSTS = {
     OrderType.MOVE: 0,
     OrderType.SCOUT: 3,
-    OrderType.FORTIFY: 1,
+    OrderType.FORTIFY: 2,
     OrderType.AMBUSH: 2,
 }
 
