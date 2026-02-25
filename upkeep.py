@@ -1,382 +1,183 @@
 """
-Upkeep phase management for "Sun Tzu: The Unfought Battle"
-Handles turn finalization, resource updates, and victory condition checking.
+Upkeep for The Unfought Battle.
 
-Based on GDD v0.7 pages 3-7:
-- Apply queued Shih actions
-- Yield Shih from controlled Contentious terrain (+2 per hex)
-- Check victory conditions (Demoralization, Domination, Encirclement)
-- Advance turn and reset phase to 'plan'
+After orders resolve, the board settles. Resources flow. The game checks
+whether anyone has won — not through combat, but through position.
+
+Victory conditions, in order of glory:
+1. Sovereign Capture — you found and destroyed the enemy king. Decisive.
+2. Domination — you held all Contentious ground for 2 consecutive turns.
+   The enemy's position is hopeless; the battle is unfought.
+3. Elimination — every enemy force is gone. Pyrrhic, but effective.
 """
 
-from typing import Dict, List, Optional, Tuple, Set
-from models import Player, Force, Hex
+import json
+import os
+from typing import Dict, Optional, Tuple, List, Any
+from models import Player, Force, Hex, ForceRole
 from state import GameState
+from orders import is_adjacent
 
 
-def log_event(game_state: GameState, event: str, **kwargs) -> None:
-    """
-    Add an event to the game state log.
-    
-    Args:
-        game_state: Current game state
-        event: Description of the event
-        **kwargs: Additional event data to include
-    """
-    log_entry = {
-        'turn': game_state.turn,
-        'phase': game_state.phase,
-        'event': event,
-        **kwargs
+def load_upkeep_config() -> Dict:
+    defaults = {
+        'base_shih_income': 2,
+        'contentious_shih_bonus': 1,
+        'domination_turns_required': 2,
+        'max_shih': 15,
     }
-    game_state.log.append(log_entry)
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            for k in defaults:
+                if k in config:
+                    defaults[k] = config[k]
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return defaults
 
 
-def get_adjacent_positions(position: Tuple[int, int]) -> List[Tuple[int, int]]:
+def get_controlled_contentious(player: Player, game_state: GameState) -> List[Tuple[int, int]]:
     """
-    Get all adjacent hex positions using axial coordinate system.
-    
-    Args:
-        position: Current position as (q, r) coordinates
-    
-    Returns:
-        List of adjacent positions
+    Return the list of Contentious hexes controlled by this player.
+    Control = player has an alive force on the hex.
     """
-    q, r = position
-    # Axial coordinate system: 6 directions
-    directions = [
-        (1, 0), (1, -1), (0, -1),  # Right, Right-Up, Up
-        (-1, 0), (-1, 1), (0, 1)   # Left, Left-Down, Down
-    ]
-    
-    adjacent = []
-    for dq, dr in directions:
-        new_pos = (q + dq, r + dr)
-        # Check if position is within map bounds (25x20)
-        if 0 <= new_pos[0] < 25 and 0 <= new_pos[1] < 20:
-            adjacent.append(new_pos)
-    
-    return adjacent
+    controlled = []
+    for pos, hex_data in game_state.map_data.items():
+        if hex_data.terrain == 'Contentious':
+            for force in player.get_alive_forces():
+                if force.position == pos:
+                    controlled.append(pos)
+                    break
+    return controlled
 
 
-def is_controlled(hex_pos: Tuple[int, int], player: Player, game_state: GameState) -> bool:
+def check_victory(game_state: GameState, combat_sovereign_capture: Optional[Dict] = None) -> Optional[Dict[str, str]]:
     """
-    Check if a hex is controlled by the specified player.
-    
-    Control means: occupied by friendly force with no adjacent enemy forces.
-    
-    Args:
-        hex_pos: Hex position to check
-        player: Player to check control for
-        game_state: Current game state
-    
-    Returns:
-        True if the hex is controlled by the player
-    """
-    # Check if player has a force at this position
-    player_force_here = False
-    for force in player.forces:
-        if force.position == hex_pos:
-            player_force_here = True
-            break
-    
-    if not player_force_here:
-        return False
-    
-    # Check if any enemy forces are adjacent
-    adjacent_positions = get_adjacent_positions(hex_pos)
-    for adj_pos in adjacent_positions:
-        force_at_adj = game_state.get_force_at_position(adj_pos)
-        if force_at_adj:
-            # Check if this force belongs to an enemy player
-            for other_player in game_state.players:
-                if other_player.id != player.id:
-                    for enemy_force in other_player.forces:
-                        if enemy_force.id == force_at_adj.id:
-                            return False  # Enemy force adjacent, not controlled
-    
-    return True
+    Check all victory conditions. Returns {'winner': id, 'type': reason} or None.
 
+    Checked in priority order:
+    1. Sovereign Capture (from combat this turn)
+    2. Elimination (all enemy forces dead)
+    3. Domination (all Contentious hexes held for N consecutive turns)
+    """
+    # 1. Sovereign Capture — passed in from combat resolution
+    if combat_sovereign_capture:
+        return {
+            'winner': combat_sovereign_capture['winner'],
+            'type': 'sovereign_capture',
+        }
 
-def calculate_shih_yield(player: Player, game_state: GameState) -> int:
-    """
-    Calculate Shih yield from controlled Contentious terrain.
-    
-    Args:
-        player: Player to calculate yield for
-        game_state: Current game state
-    
-    Returns:
-        Amount of Shih to yield (+2 per controlled Contentious hex)
-    """
-    shih_yield = 0
-    controlled_hexes = []
-    
-    for hex_pos, hex_data in game_state.map_data.items():
-        if hex_data.terrain == 'Contentious' and is_controlled(hex_pos, player, game_state):
-            shih_yield += 2
-            controlled_hexes.append(hex_pos)
-    
-    # Log controlled Contentious terrain
-    if controlled_hexes:
-        log_event(game_state, f"Player {player.id} controls {len(controlled_hexes)} Contentious hexes", 
-                 player_id=player.id, controlled_hexes=controlled_hexes, shih_yield=shih_yield)
-    
-    return shih_yield
-
-
-def is_encircled(force: Force, game_state: GameState) -> bool:
-    """
-    Check if a force is encircled by enemy forces or ghosts.
-    
-    Encirclement: all adjacent hexes blocked by enemies/ghosts.
-    
-    Args:
-        force: Force to check for encirclement
-        game_state: Current game state
-    
-    Returns:
-        True if the force is encircled
-    """
-    adjacent_positions = get_adjacent_positions(force.position)
-    
-    for adj_pos in adjacent_positions:
-        # Check if position is accessible (not blocked by enemy or ghost)
-        force_at_pos = game_state.get_force_at_position(adj_pos)
-        
-        if force_at_pos:
-            # Check if this is an enemy force
-            for player in game_state.players:
-                for player_force in player.forces:
-                    if player_force.id == force_at_pos.id:
-                        # If it's not the same player as our force, it's an enemy
-                        if player_force.id != force.id:
-                            # Check if it belongs to a different player
-                            force_player = None
-                            for p in game_state.players:
-                                for f in p.forces:
-                                    if f.id == force.id:
-                                        force_player = p
-                                        break
-                                if force_player:
-                                    break
-                            
-                            if force_player and player.id != force_player.id:
-                                continue  # This adjacent hex is blocked by enemy
-                            else:
-                                return False  # Adjacent hex is accessible
-                        else:
-                            return False  # Adjacent hex is accessible (same force)
-        else:
-            # No force at this position, so it's accessible
-            return False
-    
-    # All adjacent positions are blocked
-    return True
-
-
-def check_victory(game_state: GameState) -> Optional[str]:
-    """
-    Check for victory conditions and return winner ID if any.
-    
-    Victory conditions:
-    - Demoralization: Chi <= 0
-    - Domination: Control all Contentious terrain for one full turn
-    - Encirclement: Enemy force surrounded for 2 turns causing -20 Chi
-    
-    Args:
-        game_state: Current game state
-    
-    Returns:
-        Winner player ID if victory achieved, None otherwise
-    """
-    # Check for Demoralization (Chi <= 0)
+    # 2. Elimination — check if either player has no alive forces
     for player in game_state.players:
-        if player.chi <= 0:
-            # Find the other player as winner
-            for other_player in game_state.players:
-                if other_player.id != player.id:
-                    log_event(game_state, f"Victory by Demoralization: {other_player.id} wins - {player.id} Chi dropped to {player.chi}", 
-                             winner_id=other_player.id, loser_id=player.id, victory_type="demoralization")
-                    return other_player.id
-    
-    # Check for Domination (control all Contentious terrain for one full turn)
-    # This would require tracking when a player first controlled all Contentious terrain
-    # For now, we'll implement a simplified version
-    
-    # Check for Encirclement penalties
-    for player in game_state.players:
-        for force in player.forces:
-            if force.encircled_turns >= 2:
-                # Apply -20 Chi penalty for being encircled for 2+ turns
-                old_chi = player.chi
-                player.update_chi(-20)
-                # Reset encircled turns after applying penalty
-                force.encircled_turns = 0
-                
-                log_event(game_state, f"Encirclement penalty: {player.id} loses 20 Chi (was {old_chi}, now {player.chi})", 
-                         player_id=player.id, force_id=force.id, chi_loss=20, old_chi=old_chi, new_chi=player.chi)
-                
-                # Check if this caused demoralization
-                if player.chi <= 0:
-                    for other_player in game_state.players:
-                        if other_player.id != player.id:
-                            log_event(game_state, f"Victory by Encirclement: {other_player.id} wins - {player.id} Chi dropped to {player.chi} from encirclement", 
-                                     winner_id=other_player.id, loser_id=player.id, victory_type="encirclement")
-                            return other_player.id
-    
+        if len(player.get_alive_forces()) == 0:
+            opponent = game_state.get_opponent(player.id)
+            if opponent:
+                return {
+                    'winner': opponent.id,
+                    'type': 'elimination',
+                }
+
+    # 3. Domination — check after updating domination_turns in perform_upkeep
+    # (handled in perform_upkeep to properly track consecutive turns)
+
     return None
 
 
-def perform_upkeep(game_state: GameState) -> Dict:
+def perform_upkeep(game_state: GameState, combat_sovereign_capture: Optional[Dict] = None) -> Dict[str, Any]:
     """
-    Perform upkeep phase operations for turn finalization.
-    
-    Based on GDD pages 3-7: Apply queued Shih actions, yield Shih from controlled Contentious terrain,
-    check victory conditions, advance turn and reset phase to 'plan'.
-    
-    Args:
-        game_state: Current game state to process
-    
-    Returns:
-        Dictionary with results: {'winner': str or None, 'shih_yields': dict, 'encirclements': list}
-    
-    Raises:
-        ValueError: If game state phase is not 'execute' when upkeep is called
+    Execute the upkeep phase:
+    1. Check for immediate victory (Sovereign capture, elimination)
+    2. Apply Shih income (base + Contentious bonus)
+    3. Track domination progress
+    4. Check for domination victory
+    5. Clear turn state and advance
     """
-    # Validate that we're in the correct phase for upkeep
-    if game_state.phase != 'execute':
-        raise ValueError(f"Upkeep can only be performed during 'execute' phase, current phase is '{game_state.phase}'")
-    
-    results = {
+    config = load_upkeep_config()
+    results: Dict[str, Any] = {
         'winner': None,
-        'shih_yields': {},
-        'encirclements': [],
-        'meditate_shih_yields': {}
+        'victory_type': None,
+        'shih_income': {},
+        'contentious_control': {},
+        'domination_progress': {},
     }
-    
-    # Log upkeep phase start
-    log_event(game_state, "Upkeep phase started", turn=game_state.turn)
-    
-    # Apply Meditate orders from previous turn (+2 Shih per force, max 20)
-    meditate_shih_yields = {}
-    for player_id, orders in game_state.last_orders.items():
-        player = game_state.get_player_by_id(player_id)
-        if player:
-            meditate_count = sum(1 for order in orders if order.get('order_type') == 'Meditate')
-            if meditate_count > 0:
-                # Calculate total Shih from meditation (2 per force)
-                total_meditate_shih = meditate_count * 2
-                old_shih = player.shih
-                player.update_shih(total_meditate_shih)
-                actual_shih_gained = player.shih - old_shih
-                meditate_shih_yields[player_id] = actual_shih_gained
-                
-                log_event(game_state, f"Player {player_id} gains {actual_shih_gained} Shih from {meditate_count} Meditate orders (was {old_shih}, now {player.shih})", 
-                         player_id=player_id, meditate_count=meditate_count, shih_gained=actual_shih_gained, 
-                         old_shih=old_shih, new_shih=player.shih)
-                
-                # Store in results for API response
-                results['meditate_shih_yields'][player_id] = actual_shih_gained
-    
-    # Clear last_orders after applying them
-    game_state.last_orders = {}
-    
-    # Calculate and apply Shih yields from controlled Contentious terrain
-    for player in game_state.players:
-        old_shih = player.shih
-        shih_yield = calculate_shih_yield(player, game_state)
-        player.update_shih(shih_yield)
-        results['shih_yields'][player.id] = shih_yield
-        
-        if shih_yield > 0:
-            log_event(game_state, f"Player {player.id} gains {shih_yield} Shih from Contentious terrain (was {old_shih}, now {player.shih})", 
-                     player_id=player.id, shih_gained=shih_yield, old_shih=old_shih, new_shih=player.shih)
-    
-    # Check for encirclements and update encircled_turns
-    for player in game_state.players:
-        for force in player.forces:
-            if is_encircled(force, game_state):
-                force.encircled_turns += 1
-                log_event(game_state, f"Force {force.id} ({player.id}) is encircled for {force.encircled_turns} turn(s)", 
-                         player_id=player.id, force_id=force.id, encircled_turns=force.encircled_turns)
-                
-                if force.encircled_turns >= 2:
-                    results['encirclements'].append({
-                        'force_id': force.id,
-                        'player_id': player.id,
-                        'turns_encircled': force.encircled_turns
-                    })
-            else:
-                # Reset encircled turns if no longer encircled
-                if force.encircled_turns > 0:
-                    log_event(game_state, f"Force {force.id} ({player.id}) is no longer encircled", 
-                             player_id=player.id, force_id=force.id, previous_encircled_turns=force.encircled_turns)
-                    force.encircled_turns = 0
-    
-    # Check victory conditions
-    winner = check_victory(game_state)
-    results['winner'] = winner
-    
-    if winner:
-        log_event(game_state, f"Game Over: {winner} is victorious!", winner_id=winner, game_end_turn=game_state.turn)
-    else:
-        # Log turn completion before incrementing
-        old_turn = game_state.turn
+
+    # Step 1: Immediate victory check (Sovereign capture / elimination)
+    victory = check_victory(game_state, combat_sovereign_capture)
+    if victory:
+        results['winner'] = victory['winner']
+        results['victory_type'] = victory['type']
+        game_state.winner = victory['winner']
+        game_state.victory_type = victory['type']
+        game_state.phase = 'ended'
         game_state.log.append({
-            'turn': game_state.turn,
-            'phase': game_state.phase,
-            'event': f'Turn {game_state.turn} completed, advancing to plan phase of turn {game_state.turn + 1}'
+            'turn': game_state.turn, 'phase': 'upkeep',
+            'event': f"Victory: {victory['winner']} wins by {victory['type']}",
         })
-        
-        # Set phase to 'plan' and increment turn (unless game is over)
-        game_state.phase = 'plan'
-        game_state.turn += 1
-        
-        log_event(game_state, f"Turn {old_turn} completed, advancing to {game_state.phase} phase of turn {game_state.turn}", 
-                 previous_turn=old_turn, previous_phase='execute', new_turn=game_state.turn, new_phase=game_state.phase)
-    
-    return results
+        return results
 
+    # Step 2: Shih income
+    base_income = config['base_shih_income']
+    contentious_bonus = config['contentious_shih_bonus']
 
-def get_upkeep_summary(game_state: GameState) -> Dict:
-    """
-    Get a summary of the current state for upkeep calculations.
-    
-    Args:
-        game_state: Current game state
-    
-    Returns:
-        Dictionary with upkeep-relevant information
-    """
-    summary = {
-        'turn': game_state.turn,
-        'phase': game_state.phase,
-        'players': {}
-    }
-    
     for player in game_state.players:
-        controlled_contentious = 0
-        encircled_forces = []
-        
-        # Count controlled Contentious terrain
-        for hex_pos, hex_data in game_state.map_data.items():
-            if hex_data.terrain == 'Contentious' and is_controlled(hex_pos, player, game_state):
-                controlled_contentious += 1
-        
-        # Check for encircled forces
-        for force in player.forces:
-            if is_encircled(force, game_state):
-                encircled_forces.append({
-                    'force_id': force.id,
-                    'turns_encircled': force.encircled_turns
-                })
-        
-        summary['players'][player.id] = {
-            'chi': player.chi,
-            'shih': player.shih,
-            'controlled_contentious': controlled_contentious,
-            'encircled_forces': encircled_forces
-        }
-    
-    return summary
+        controlled = get_controlled_contentious(player, game_state)
+        income = base_income + (len(controlled) * contentious_bonus)
+        old_shih = player.shih
+        player.update_shih(income)
+        results['shih_income'][player.id] = player.shih - old_shih
+        results['contentious_control'][player.id] = [list(pos) for pos in controlled]
+
+        game_state.log.append({
+            'turn': game_state.turn, 'phase': 'upkeep',
+            'event': (
+                f'{player.id} earns {income} Shih '
+                f'(base {base_income} + {len(controlled)} Contentious) '
+                f'— now {player.shih}'
+            ),
+        })
+
+    # Step 3: Domination tracking
+    contentious_hexes = [
+        pos for pos, h in game_state.map_data.items() if h.terrain == 'Contentious'
+    ]
+    domination_required = config['domination_turns_required']
+
+    for player in game_state.players:
+        controlled = get_controlled_contentious(player, game_state)
+        if len(controlled) == len(contentious_hexes) and len(contentious_hexes) > 0:
+            player.domination_turns += 1
+        else:
+            player.domination_turns = 0
+        results['domination_progress'][player.id] = player.domination_turns
+
+    # Step 4: Domination victory check
+    for player in game_state.players:
+        if player.domination_turns >= domination_required:
+            results['winner'] = player.id
+            results['victory_type'] = 'domination'
+            game_state.winner = player.id
+            game_state.victory_type = 'domination'
+            game_state.phase = 'ended'
+            game_state.log.append({
+                'turn': game_state.turn, 'phase': 'upkeep',
+                'event': (
+                    f"Victory: {player.id} wins by domination "
+                    f"(held all Contentious hexes for {domination_required} turns)"
+                ),
+            })
+            return results
+
+    # Step 5: Advance turn
+    game_state.feints = []  # Clear feint data
+    game_state.turn += 1
+    game_state.phase = 'plan'
+    game_state.orders_submitted = {}
+
+    game_state.log.append({
+        'turn': game_state.turn, 'phase': 'plan',
+        'event': f'Turn {game_state.turn} begins.',
+    })
+
+    return results

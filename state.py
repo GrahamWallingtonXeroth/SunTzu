@@ -1,10 +1,10 @@
 """
-Game state management for "Sun Tzu: The Unfought Battle"
-Implements game state, player management, and force tracking based on GDD v0.7.
+Game state management for The Unfought Battle.
 
-Resources: Chi (morale, starts 100), Shih (momentum, starts 10, max 20)
-Forces: 3 per player with positions, stances, and order tendencies
-Map: 10x10 hexes with axial coordinate system
+The state is the source of truth, but it's not the whole truth.
+Each player sees a filtered view — their own forces in full,
+enemy forces as anonymous tokens. What you know depends on
+what you've scouted and who you've fought.
 """
 
 from __future__ import annotations
@@ -13,196 +13,249 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any
-from map_gen import generate_map
-from models import Force, Player, Hex
+from map_gen import generate_map, BOARD_SIZE, is_valid_hex
+from models import Force, Player, Hex, ForceRole, ROLE_COUNTS
+
 
 @dataclass
 class GameState:
-    """
-    Complete game state containing all game information.
-    
-    Based on GDD: Game progresses through turns and phases (plan/execute/upkeep),
-    with players managing forces on a 10x10 hex map.
-    """
-    game_id: str  # Unique game identifier
-    turn: int = 1  # Current turn number (starts at 1)
-    phase: str = 'plan'  # Current phase: 'plan', 'execute', 'upkeep'
-    players: List[Player] = field(default_factory=list)  # List of players
-    map_data: Dict[Tuple[int, int], Hex] = field(default_factory=dict)  # Map data
-    log: List[Dict[str, Any]] = field(default_factory=list)  # Game log for analysis
-    orders_submitted: Dict[str, bool] = field(default_factory=dict)  # Track which players have submitted orders
-    last_orders: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)  # Track orders from previous turn for upkeep effects
-    
+    """Complete game state. The god-view that no player ever sees in full."""
+    game_id: str
+    turn: int = 0  # 0 = deployment phase, 1+ = gameplay
+    phase: str = 'deploy'  # 'deploy', 'plan', 'resolve', 'ended'
+    players: List[Player] = field(default_factory=list)
+    map_data: Dict[Tuple[int, int], Hex] = field(default_factory=dict)
+    log: List[Dict[str, Any]] = field(default_factory=list)
+    orders_submitted: Dict[str, bool] = field(default_factory=dict)
+    winner: Optional[str] = None
+    victory_type: Optional[str] = None
+    board_size: int = BOARD_SIZE
+    # Tracks feints this turn for the reveal phase
+    feints: List[Dict[str, Any]] = field(default_factory=list)
+
     def get_player_by_id(self, player_id: str) -> Optional[Player]:
-        """Get a player by their ID."""
         for player in self.players:
             if player.id == player_id:
                 return player
         return None
-    
-    def get_force_at_position(self, position: Tuple[int, int]) -> Optional[Force]:
-        """Get the force at a specific position, if any."""
+
+    def get_opponent(self, player_id: str) -> Optional[Player]:
         for player in self.players:
-            for force in player.forces:
+            if player.id != player_id:
+                return player
+        return None
+
+    def get_force_at_position(self, position: Tuple[int, int]) -> Optional[Force]:
+        for player in self.players:
+            for force in player.get_alive_forces():
                 if force.position == position:
                     return force
         return None
-    
-    def advance_phase(self) -> None:
-        """Advance to the next phase in the game cycle."""
-        phase_cycle = ['plan', 'execute', 'upkeep']
-        current_index = phase_cycle.index(self.phase)
-        next_index = (current_index + 1) % len(phase_cycle)
-        self.phase = phase_cycle[next_index]
-        
-        # If we've completed a full cycle, advance the turn
-        if self.phase == 'plan':
-            self.turn += 1
-    
+
+    def get_force_owner(self, force_id: str) -> Optional[Player]:
+        for player in self.players:
+            for force in player.forces:
+                if force.id == force_id:
+                    return player
+        return None
+
     def is_valid_position(self, position: Tuple[int, int]) -> bool:
-        """Check if a position is within the valid map bounds (10x10)."""
-        q, r = position
-        return 0 <= q < 10 and 0 <= r < 10
+        return is_valid_hex(position[0], position[1], self.board_size)
 
 
-def create_force(force_id: str, position: Tuple[int, int], stance: str = 'Mountain') -> Force:
-    """
-    Create a new force with the specified parameters.
-    
-    Args:
-        force_id: Unique identifier for the force
-        position: Starting position as (q, r) coordinates
-        stance: Initial stance (default: 'Mountain')
-    
-    Returns:
-        New Force instance
-    """
-    return Force(
-        id=force_id,
-        position=position,
-        stance=stance,
-        tendency=[]
-    )
-
-
-def create_player(player_id: str, starting_positions: List[Tuple[int, int]], 
-                 starting_chi: int = 100, starting_shih: int = 10, 
-                 force_count: int = 3, max_shih: int = 20) -> Player:
-    """
-    Create a new player with forces at the specified starting positions.
-    
-    Args:
-        player_id: Player identifier ('p1' or 'p2')
-        starting_positions: List of starting positions for forces
-        starting_chi: Starting Chi value (default: 100)
-        starting_shih: Starting Shih value (default: 10)
-        force_count: Number of forces to create (default: 3)
-        max_shih: Maximum Shih value (default: 20)
-    
-    Returns:
-        New Player instance with forces
-    """
-    player = Player(id=player_id, chi=starting_chi, shih=starting_shih, max_shih=max_shih)
-    
-    # Create forces for the player
-    for i, position in enumerate(starting_positions[:force_count], 1):
-        force_id = f"{player_id}_f{i}"
-        force = create_force(force_id, position)
-        player.add_force(force)
-    
-    return player
+def load_config() -> Dict:
+    """Load game configuration with defaults."""
+    defaults = {
+        'starting_shih': 8,
+        'max_shih': 15,
+        'force_count': 5,
+        'board_size': 7,
+    }
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            defaults.update(config)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return defaults
 
 
 def initialize_game(seed: int) -> GameState:
     """
-    Initialize a new game state with two players and generated map.
-    
-    Based on GDD: Players start at opposite corners with 3 forces each.
-    P1 starts at (0,0), P2 starts at (9,9) - opposite corners of 10x10 map.
-    
-    Args:
-        seed: Random seed for map generation (required)
-    
-    Returns:
-        New GameState instance ready for gameplay
+    Create a new game in the deployment phase.
+
+    Players start at opposite corners of the 7x7 board with 5 unassigned forces.
+    Roles must be assigned via the deploy endpoint before play begins.
     """
-    # Load config values with defaults
-    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
-    starting_chi = 100
-    starting_shih = 10
-    max_shih = 20
-    force_count = 3
-    
-    try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-            starting_chi = config.get('starting_chi', starting_chi)
-            starting_shih = config.get('starting_shih', starting_shih)
-            max_shih = config.get('max_shih', max_shih)
-            force_count = config.get('force_count', force_count)
-    except (FileNotFoundError, json.JSONDecodeError):
-        # Use defaults if config file is missing or invalid
-        pass
-    
-    # Generate unique game ID
+    config = load_config()
+    board_size = config.get('board_size', BOARD_SIZE)
+    starting_shih = config.get('starting_shih', 8)
+    max_shih = config.get('max_shih', 15)
+    force_count = config.get('force_count', 5)
+
     game_id = str(uuid.uuid4())
-    
-    # Generate map data
-    map_data = generate_map(seed)
-    
-    # Create players with starting positions
-    # P1 starts at (0,0) - top-left corner
-    p1_positions = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2)]  # Support up to 6 forces
-    player1 = create_player('p1', p1_positions, starting_chi, starting_shih, force_count, max_shih)
-    
-    # P2 starts at (9,9) - bottom-right corner of 10x10 map
-    p2_positions = [(9, 9), (8, 9), (9, 8), (8, 8), (7, 9), (9, 7)]  # Support up to 6 forces
-    player2 = create_player('p2', p2_positions, starting_chi, starting_shih, force_count, max_shih)
-    
-    # Create game state
-    game_state = GameState(
+    map_data = generate_map(seed, board_size)
+
+    # P1 starts at top-left corner cluster
+    p1_positions = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0)][:force_count]
+    # P2 starts at bottom-right corner cluster
+    last = board_size - 1
+    p2_positions = [
+        (last, last), (last - 1, last), (last, last - 1),
+        (last - 1, last - 1), (last - 2, last)
+    ][:force_count]
+
+    player1 = Player(id='p1', shih=starting_shih, max_shih=max_shih)
+    for i, pos in enumerate(p1_positions, 1):
+        player1.add_force(Force(id=f'p1_f{i}', position=pos))
+
+    player2 = Player(id='p2', shih=starting_shih, max_shih=max_shih)
+    for i, pos in enumerate(p2_positions, 1):
+        player2.add_force(Force(id=f'p2_f{i}', position=pos))
+
+    return GameState(
         game_id=game_id,
-        turn=1,
-        phase='plan',
+        turn=0,
+        phase='deploy',
         players=[player1, player2],
         map_data=map_data,
-        log=[],  # Initialize empty game log
-        orders_submitted={}  # Initialize empty orders tracking
+        board_size=board_size,
     )
-    
-    return game_state
 
 
-def get_game_summary(game_state: GameState) -> Dict:
+def validate_deployment(assignments: Dict[str, str]) -> Optional[str]:
     """
-    Get a summary of the current game state for API responses.
-    
-    Args:
-        game_state: Current game state
-    
-    Returns:
-        Dictionary with game summary information
+    Validate that a role assignment is legal.
+    Must have exactly: 1 Sovereign, 2 Vanguard, 1 Scout, 1 Shield.
+    Returns error message or None if valid.
     """
+    role_counts: Dict[str, int] = {}
+    for role_str in assignments.values():
+        role_counts[role_str] = role_counts.get(role_str, 0) + 1
+
+    for role, required in ROLE_COUNTS.items():
+        actual = role_counts.get(role.value, 0)
+        if actual != required:
+            return f"Need exactly {required} {role.value}, got {actual}"
+    return None
+
+
+def apply_deployment(game_state: GameState, player_id: str, assignments: Dict[str, str]) -> Optional[str]:
+    """
+    Assign roles to a player's forces. Returns error message or None.
+    """
+    player = game_state.get_player_by_id(player_id)
+    if not player:
+        return f"Player {player_id} not found"
+    if player.deployed:
+        return f"Player {player_id} has already deployed"
+
+    # Validate force IDs belong to this player
+    for force_id in assignments:
+        if not player.get_force_by_id(force_id):
+            return f"Force {force_id} does not belong to {player_id}"
+
+    # Validate all forces are assigned
+    if len(assignments) != len(player.forces):
+        return f"Must assign roles to all {len(player.forces)} forces"
+
+    # Validate role composition
+    error = validate_deployment(assignments)
+    if error:
+        return error
+
+    # Apply roles
+    for force_id, role_str in assignments.items():
+        force = player.get_force_by_id(force_id)
+        force.role = ForceRole(role_str)
+
+    player.deployed = True
+
+    game_state.log.append({
+        'turn': 0,
+        'phase': 'deploy',
+        'event': f'Player {player_id} deployed forces',
+    })
+
+    # If both players have deployed, advance to plan phase
+    if all(p.deployed for p in game_state.players):
+        game_state.phase = 'plan'
+        game_state.turn = 1
+        game_state.log.append({
+            'turn': 1,
+            'phase': 'plan',
+            'event': 'Both players deployed. The battle begins.',
+        })
+
+    return None
+
+
+def get_player_view(game_state: GameState, player_id: str) -> Dict:
+    """
+    Return the game state as seen by a specific player.
+
+    You see:
+    - Your own forces with full details (role, position)
+    - Enemy forces as anonymous tokens (position only)
+    - Enemy roles you've discovered through scouting or combat
+    - The full map
+
+    You don't see:
+    - Enemy roles you haven't discovered
+    - What the enemy has scouted about you
+    """
+    player = game_state.get_player_by_id(player_id)
+    opponent = game_state.get_opponent(player_id)
+
+    if not player or not opponent:
+        return {}
+
+    # Your forces: full information
+    own_forces = []
+    for f in player.get_alive_forces():
+        own_forces.append({
+            'id': f.id,
+            'position': {'q': f.position[0], 'r': f.position[1]},
+            'role': f.role.value if f.role else None,
+            'revealed': f.revealed,
+            'fortified': f.fortified,
+        })
+
+    # Enemy forces: position only, plus any roles you've learned
+    enemy_forces = []
+    for f in opponent.get_alive_forces():
+        force_data: Dict[str, Any] = {
+            'id': f.id,
+            'position': {'q': f.position[0], 'r': f.position[1]},
+        }
+        # Include role if publicly revealed (combat) or privately scouted
+        if f.revealed:
+            force_data['role'] = f.role.value if f.role else None
+            force_data['revealed'] = True
+        elif f.id in player.known_enemy_roles:
+            force_data['role'] = player.known_enemy_roles[f.id]
+            force_data['scouted'] = True
+        enemy_forces.append(force_data)
+
     return {
         'game_id': game_state.game_id,
         'turn': game_state.turn,
         'phase': game_state.phase,
-        'players': [
-            {
-                'id': player.id,
-                'chi': player.chi,
-                'shih': player.shih,
-                'forces': [
-                    {
-                        'id': force.id,
-                        'position': force.position,
-                        'stance': force.stance,
-                        'tendency': force.tendency
-                    }
-                    for force in player.forces
-                ]
-            }
-            for player in game_state.players
+        'your_shih': player.shih,
+        'your_forces': own_forces,
+        'enemy_forces': enemy_forces,
+        'enemy_shih': opponent.shih,
+        'domination_turns': {
+            player_id: player.domination_turns,
+            opponent.id: opponent.domination_turns,
+        },
+        'orders_submitted': game_state.orders_submitted.copy(),
+        'winner': game_state.winner,
+        'victory_type': game_state.victory_type,
+        'feints': game_state.feints,
+        'map': [
+            {'q': pos[0], 'r': pos[1], 'terrain': h.terrain}
+            for pos, h in game_state.map_data.items()
         ],
-        'map_size': (10, 10)
     }
