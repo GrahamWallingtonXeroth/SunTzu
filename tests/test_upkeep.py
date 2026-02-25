@@ -1,23 +1,27 @@
-"""Tests for upkeep: victory conditions, Shih income, domination tracking."""
+"""Tests for v3 upkeep: shrinking board, victory conditions, Shih income, domination."""
 
 import pytest
-from upkeep import perform_upkeep, check_victory, get_controlled_contentious
+from upkeep import perform_upkeep, check_victory, get_controlled_contentious, apply_board_shrink
 from state import GameState
-from models import Player, Force, Hex, ForceRole
+from models import Player, Force, Hex, SOVEREIGN_POWER
 
 
 def make_upkeep_state():
     """Create a game state ready for upkeep testing."""
-    p1 = Player(id='p1', shih=8, max_shih=15)
-    p2 = Player(id='p2', shih=8, max_shih=15)
+    p1 = Player(id='p1', shih=5, max_shih=10)
+    p2 = Player(id='p2', shih=5, max_shih=10)
 
-    # P1 forces
-    p1.add_force(Force(id='p1_f1', position=(3, 3), role=ForceRole.SOVEREIGN))
-    p1.add_force(Force(id='p1_f2', position=(3, 4), role=ForceRole.VANGUARD))
+    # P1 forces with power values
+    p1.add_force(Force(id='p1_f1', position=(3, 3), power=1))  # Sovereign
+    p1.add_force(Force(id='p1_f2', position=(3, 4), power=5))
 
-    # P2 forces
-    p2.add_force(Force(id='p2_f1', position=(5, 5), role=ForceRole.SOVEREIGN))
-    p2.add_force(Force(id='p2_f2', position=(5, 4), role=ForceRole.VANGUARD))
+    # P2 forces with power values
+    p2.add_force(Force(id='p2_f1', position=(5, 5), power=1))  # Sovereign
+    p2.add_force(Force(id='p2_f2', position=(5, 4), power=5))
+
+    # Mark both as deployed
+    p1.deployed = True
+    p2.deployed = True
 
     game = GameState(
         game_id='test', turn=1, phase='resolve',
@@ -29,6 +33,8 @@ def make_upkeep_state():
             (4, 4): Hex(q=4, r=4, terrain='Contentious'),
             (5, 5): Hex(q=5, r=5, terrain='Open'),
             (5, 4): Hex(q=5, r=4, terrain='Open'),
+            (0, 0): Hex(q=0, r=0, terrain='Open'),
+            (6, 6): Hex(q=6, r=6, terrain='Open'),
         },
     )
     return game
@@ -40,22 +46,32 @@ class TestShihIncome:
         p1 = game.get_player_by_id('p1')
         old_shih = p1.shih
         results = perform_upkeep(game)
-        # Base 2 + 1 contentious (p1 has force at (3,3) which is Contentious)
+        # Base 1 + 1 contentious hex * 2 = 3 income
         assert p1.shih > old_shih
 
     def test_contentious_bonus(self):
         game = make_upkeep_state()
         p1 = game.get_player_by_id('p1')
         controlled = get_controlled_contentious(p1, game)
-        # p1_f1 at (3,3) is Contentious
         assert (3, 3) in controlled
 
     def test_shih_caps_at_max(self):
         game = make_upkeep_state()
         p1 = game.get_player_by_id('p1')
-        p1.shih = 14  # Near max of 15
+        p1.shih = 9  # Near max of 10
         perform_upkeep(game)
-        assert p1.shih <= 15
+        assert p1.shih <= 10
+
+    def test_higher_contentious_bonus(self):
+        """In v3, each contentious hex gives +2 Shih."""
+        game = make_upkeep_state()
+        p1 = game.get_player_by_id('p1')
+        # Put p1 on 2 contentious hexes
+        p1.forces[1].position = (4, 3)
+        p1.shih = 0
+        perform_upkeep(game)
+        # Base 1 + 2 contentious * 2 = 5
+        assert p1.shih == 5
 
 
 class TestVictoryConditions:
@@ -75,33 +91,42 @@ class TestVictoryConditions:
         result = check_victory(game)
         assert result is not None
         assert result['winner'] == 'p1'
-        assert result['type'] == 'elimination'
 
     def test_no_winner_normally(self):
         game = make_upkeep_state()
         result = check_victory(game)
         assert result is None
 
-    def test_domination_requires_consecutive_turns(self):
+    def test_sovereign_death_from_noose(self):
+        """If the Sovereign (power 1) dies from board shrink, that player loses."""
+        game = make_upkeep_state()
+        p2 = game.get_player_by_id('p2')
+        # Kill p2's sovereign
+        for f in p2.forces:
+            if f.is_sovereign:
+                f.alive = False
+        result = check_victory(game)
+        assert result is not None
+        assert result['winner'] == 'p1'
+        assert result['type'] == 'sovereign_capture'
+
+    def test_domination_requires_2_of_3(self):
+        """v3: need 2 of 3 contentious hexes, not all 3."""
         game = make_upkeep_state()
         p1 = game.get_player_by_id('p1')
-        # Place p1 forces on ALL contentious hexes
-        p1.forces[0].position = (3, 3)
+        # p1 controls 1 contentious (3,3) via p1_f1, put p1_f2 on another
         p1.forces[1].position = (4, 3)
-        p1.add_force(Force(id='p1_f3', position=(4, 4), role=ForceRole.SHIELD))
-
         results = perform_upkeep(game)
-        assert results['winner'] is None  # Only 1 turn, need 2
+        assert results['winner'] is None  # Only 1 turn, need 3
         assert p1.domination_turns == 1
 
-    def test_domination_victory_after_2_turns(self):
+    def test_domination_victory_after_3_turns(self):
+        """v3: need 3 consecutive turns of holding 2+ contentious hexes."""
         game = make_upkeep_state()
         p1 = game.get_player_by_id('p1')
-        p1.domination_turns = 1  # Already held for 1 turn
-        # Place on all contentious hexes
+        p1.domination_turns = 2  # Already held for 2 turns
         p1.forces[0].position = (3, 3)
         p1.forces[1].position = (4, 3)
-        p1.add_force(Force(id='p1_f3', position=(4, 4), role=ForceRole.SHIELD))
 
         results = perform_upkeep(game)
         assert results['winner'] == 'p1'
@@ -110,10 +135,61 @@ class TestVictoryConditions:
     def test_domination_resets_when_lost(self):
         game = make_upkeep_state()
         p1 = game.get_player_by_id('p1')
-        p1.domination_turns = 1
-        # p1 does NOT control all contentious hexes (missing some)
+        p1.domination_turns = 2
+        # p1 only controls 1 contentious hex (need 2)
         results = perform_upkeep(game)
         assert p1.domination_turns == 0  # Reset
+
+
+class TestBoardShrink:
+    def test_shrink_at_interval(self):
+        """Board shrinks at turn multiples of shrink_interval."""
+        game = make_upkeep_state()
+        game.turn = 4  # shrink_interval = 4
+        assert game.shrink_stage == 0
+        perform_upkeep(game)
+        assert game.shrink_stage == 1
+
+    def test_no_shrink_before_interval(self):
+        game = make_upkeep_state()
+        game.turn = 3
+        perform_upkeep(game)
+        assert game.shrink_stage == 0
+
+    def test_scorched_hexes_after_shrink(self):
+        game = make_upkeep_state()
+        game.shrink_stage = 1
+        events = apply_board_shrink(game)
+        # (0,0) is distance 6 from center — should be scorched at stage 1 (max dist 4)
+        assert game.map_data[(0, 0)].terrain == 'Scorched'
+
+    def test_center_never_scorched(self):
+        game = make_upkeep_state()
+        game.shrink_stage = 3
+        apply_board_shrink(game)
+        assert game.map_data[(3, 3)].terrain != 'Scorched'
+
+    def test_force_killed_on_scorched_hex(self):
+        game = make_upkeep_state()
+        # Move p2's sovereign to the edge
+        p2 = game.get_player_by_id('p2')
+        p2.forces[0].position = (0, 0)  # Far corner
+        game.shrink_stage = 1
+        events = apply_board_shrink(game)
+        force_deaths = [e for e in events if e['type'] == 'force_scorched']
+        assert len(force_deaths) >= 1
+        assert not p2.forces[0].alive
+
+    def test_sovereign_death_by_noose_ends_game(self):
+        """If Sovereign is on a hex that gets Scorched, that player loses."""
+        game = make_upkeep_state()
+        p2 = game.get_player_by_id('p2')
+        p2.forces[0].position = (0, 0)  # Sovereign at far corner
+        p2.forces[1].position = (3, 2)  # Other force safe
+        game.turn = 4
+        results = perform_upkeep(game)
+        assert results['winner'] == 'p1'
+        assert results['victory_type'] == 'sovereign_capture'
 
 
 class TestUpkeepPhaseTransition:
@@ -132,9 +208,3 @@ class TestUpkeepPhaseTransition:
         perform_upkeep(game)
         assert game.phase == 'ended'
         assert game.winner == 'p1'
-
-    def test_clears_feints(self):
-        game = make_upkeep_state()
-        game.feints = [{'force_id': 'p1_f1', 'toward': (4, 3)}]
-        perform_upkeep(game)
-        assert game.feints == []

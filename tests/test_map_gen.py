@@ -1,9 +1,11 @@
-"""Tests for 7x7 hex map generation."""
+"""Tests for 7x7 hex map generation — v3 with shrinking board support."""
 
 import pytest
 from map_gen import (
     generate_map, get_hex_neighbors, hex_distance,
-    is_valid_hex, a_star_path, BOARD_SIZE,
+    is_valid_hex, a_star_path, distance_from_center,
+    max_distance_for_shrink_stage, is_scorched,
+    BOARD_SIZE, CENTER_Q, CENTER_R,
 )
 from models import Hex
 
@@ -33,6 +35,53 @@ class TestHexUtilities:
         assert is_valid_hex(0, 7) is False
 
 
+class TestCenterDistance:
+    def test_center_is_distance_0(self):
+        assert distance_from_center(CENTER_Q, CENTER_R) == 0
+
+    def test_corner_distance(self):
+        d = distance_from_center(0, 0)
+        assert d > 0
+
+    def test_adjacent_to_center(self):
+        assert distance_from_center(4, 3) == 1
+        assert distance_from_center(3, 4) == 1
+
+
+class TestShrinkStages:
+    def test_stage_0_no_limit(self):
+        assert max_distance_for_shrink_stage(0) == BOARD_SIZE
+
+    def test_stage_1_limits(self):
+        assert max_distance_for_shrink_stage(1) == 4
+
+    def test_stage_2_limits(self):
+        assert max_distance_for_shrink_stage(2) == 3
+
+    def test_stage_3_limits(self):
+        assert max_distance_for_shrink_stage(3) == 2
+
+    def test_stage_4_plus(self):
+        assert max_distance_for_shrink_stage(4) == 1
+        assert max_distance_for_shrink_stage(5) == 1
+
+    def test_is_scorched_stage_0(self):
+        assert is_scorched(0, 0, 0) is False
+        assert is_scorched(6, 6, 0) is False
+
+    def test_is_scorched_stage_1(self):
+        # (0,0) is distance 6 from center (3,3), stage 1 allows max 4
+        assert is_scorched(0, 0, 1) is True
+        # (3,3) is center, never scorched
+        assert is_scorched(3, 3, 1) is False
+
+    def test_is_scorched_stage_2(self):
+        # Center adjacent should be fine
+        assert is_scorched(3, 4, 2) is False
+        # Far corners should be scorched
+        assert is_scorched(0, 0, 2) is True
+
+
 class TestMapGeneration:
     def test_map_size(self):
         m = generate_map(seed=42)
@@ -59,7 +108,7 @@ class TestMapGeneration:
     def test_has_difficult_terrain(self):
         m = generate_map(seed=42)
         difficult = [h for h in m.values() if h.terrain == 'Difficult']
-        assert len(difficult) >= 2  # At least some
+        assert len(difficult) >= 2
 
     def test_paths_exist_to_contentious(self):
         m = generate_map(seed=42)
@@ -81,3 +130,11 @@ class TestMapGeneration:
         m2 = generate_map(seed=999)
         diffs = sum(1 for pos in m1 if m1[pos].terrain != m2[pos].terrain)
         assert diffs > 0
+
+    def test_a_star_avoids_scorched(self):
+        m = generate_map(seed=42)
+        # Scorch a hex and verify A* avoids it
+        m[(3, 3)].terrain = 'Scorched'
+        path = a_star_path((2, 3), (4, 3), m)
+        if path:
+            assert (3, 3) not in path

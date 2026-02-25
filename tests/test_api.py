@@ -1,4 +1,4 @@
-"""Tests for the Flask API: endpoints, information hiding, game flow."""
+"""Tests for the v3 Flask API: endpoints, fog of war, game flow."""
 
 import pytest
 import json
@@ -25,15 +25,13 @@ def deploy_both(client, game_id):
     p1 = {
         'player_id': 'p1',
         'assignments': {
-            'p1_f1': 'Sovereign', 'p1_f2': 'Vanguard', 'p1_f3': 'Vanguard',
-            'p1_f4': 'Scout', 'p1_f5': 'Shield',
+            'p1_f1': 1, 'p1_f2': 5, 'p1_f3': 4, 'p1_f4': 2, 'p1_f5': 3,
         },
     }
     p2 = {
         'player_id': 'p2',
         'assignments': {
-            'p2_f1': 'Sovereign', 'p2_f2': 'Vanguard', 'p2_f3': 'Vanguard',
-            'p2_f4': 'Scout', 'p2_f5': 'Shield',
+            'p2_f1': 1, 'p2_f2': 5, 'p2_f3': 4, 'p2_f4': 2, 'p2_f5': 3,
         },
     }
     r1 = client.post(f'/api/game/{game_id}/deploy', json=p1)
@@ -64,8 +62,7 @@ class TestDeployment:
         resp = client.post(f'/api/game/{gid}/deploy', json={
             'player_id': 'p1',
             'assignments': {
-                'p1_f1': 'Sovereign', 'p1_f2': 'Vanguard', 'p1_f3': 'Vanguard',
-                'p1_f4': 'Scout', 'p1_f5': 'Shield',
+                'p1_f1': 1, 'p1_f2': 2, 'p1_f3': 3, 'p1_f4': 4, 'p1_f5': 5,
             },
         })
         assert resp.status_code == 200
@@ -81,8 +78,7 @@ class TestDeployment:
         resp = client.post(f'/api/game/{gid}/deploy', json={
             'player_id': 'p1',
             'assignments': {
-                'p1_f1': 'Sovereign', 'p1_f2': 'Sovereign',
-                'p1_f3': 'Vanguard', 'p1_f4': 'Scout', 'p1_f5': 'Shield',
+                'p1_f1': 1, 'p1_f2': 1, 'p1_f3': 3, 'p1_f4': 4, 'p1_f5': 5,
             },
         })
         assert resp.status_code == 400
@@ -90,12 +86,20 @@ class TestDeployment:
     def test_deploy_wrong_phase(self, client):
         gid = create_game(client)
         deploy_both(client, gid)
-        # Try deploying again in plan phase
         resp = client.post(f'/api/game/{gid}/deploy', json={
             'player_id': 'p1',
             'assignments': {
-                'p1_f1': 'Sovereign', 'p1_f2': 'Vanguard', 'p1_f3': 'Vanguard',
-                'p1_f4': 'Scout', 'p1_f5': 'Shield',
+                'p1_f1': 1, 'p1_f2': 2, 'p1_f3': 3, 'p1_f4': 4, 'p1_f5': 5,
+            },
+        })
+        assert resp.status_code == 400
+
+    def test_deploy_with_out_of_range_values(self, client):
+        gid = create_game(client)
+        resp = client.post(f'/api/game/{gid}/deploy', json={
+            'player_id': 'p1',
+            'assignments': {
+                'p1_f1': 0, 'p1_f2': 2, 'p1_f3': 3, 'p1_f4': 4, 'p1_f5': 5,
             },
         })
         assert resp.status_code == 400
@@ -107,20 +111,27 @@ class TestState:
         resp = client.get(f'/api/game/{gid}/state')
         assert resp.status_code == 400
 
-    def test_shows_own_roles(self, client):
+    def test_shows_own_power(self, client):
         gid = create_game(client)
         deploy_both(client, gid)
         resp = client.get(f'/api/game/{gid}/state?player_id=p1')
         assert resp.status_code == 200
         for f in resp.json['your_forces']:
-            assert f['role'] is not None
+            assert f['power'] is not None
 
-    def test_hides_enemy_roles(self, client):
+    def test_fog_hides_distant_enemies(self, client):
+        """Enemies at (6,6) corner are beyond visibility of p1 at (0,0)."""
         gid = create_game(client)
         deploy_both(client, gid)
         resp = client.get(f'/api/game/{gid}/state?player_id=p1')
-        for f in resp.json['enemy_forces']:
-            assert 'role' not in f  # No role unless scouted/revealed
+        # All p2 forces are at far corner, should be hidden
+        assert len(resp.json['enemy_forces']) == 0
+
+    def test_includes_shrink_stage(self, client):
+        gid = create_game(client)
+        deploy_both(client, gid)
+        resp = client.get(f'/api/game/{gid}/state?player_id=p1')
+        assert 'shrink_stage' in resp.json
 
     def test_game_not_found(self, client):
         resp = client.get('/api/game/nonexistent/state?player_id=p1')
@@ -173,9 +184,23 @@ class TestAction:
         assert resp.json['phase'] == 'plan'  # Advanced to next turn
         assert resp.json['turn'] == 2
 
+    def test_ambush_order_accepted(self, client):
+        gid = create_game(client)
+        deploy_both(client, gid)
+        resp = client.post(f'/api/game/{gid}/action', json={
+            'player_id': 'p1',
+            'orders': [
+                {'force_id': 'p1_f1', 'order': 'Ambush'},
+                {'force_id': 'p1_f2', 'order': 'Fortify'},
+                {'force_id': 'p1_f3', 'order': 'Fortify'},
+                {'force_id': 'p1_f4', 'order': 'Fortify'},
+                {'force_id': 'p1_f5', 'order': 'Fortify'},
+            ],
+        })
+        assert resp.status_code == 200
+
     def test_wrong_phase_rejected(self, client):
         gid = create_game(client)
-        # Try submitting during deploy phase
         resp = client.post(f'/api/game/{gid}/action', json={
             'player_id': 'p1',
             'orders': [{'force_id': 'p1_f1', 'order': 'Fortify'}],
@@ -187,7 +212,17 @@ class TestAction:
         deploy_both(client, gid)
         resp = client.post(f'/api/game/{gid}/action', json={
             'player_id': 'p1',
-            'orders': [{'force_id': 'p1_f1', 'order': 'Meditate'}],
+            'orders': [{'force_id': 'p1_f1', 'order': 'Feint'}],
+        })
+        assert resp.status_code == 400
+
+    def test_feint_no_longer_valid(self, client):
+        """Feint was removed in v3, replaced by Ambush."""
+        gid = create_game(client)
+        deploy_both(client, gid)
+        resp = client.post(f'/api/game/{gid}/action', json={
+            'player_id': 'p1',
+            'orders': [{'force_id': 'p1_f1', 'order': 'Feint'}],
         })
         assert resp.status_code == 400
 

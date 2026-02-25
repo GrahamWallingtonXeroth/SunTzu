@@ -1,35 +1,35 @@
 """
-Order processing for The Unfought Battle.
+Order processing for The Unfought Battle v3.
 
 Four orders. Movement is free. Everything else costs momentum.
 
-Move   — 0 Shih. Go to an adjacent hex.
-Scout  — 2 Shih. Stay put. Learn the role of one adjacent enemy force. Secret.
+Move    — 0 Shih. Go to an adjacent non-Scorched hex.
+Scout   — 3 Shih. Stay put. Learn the power of one enemy force within 2 hexes. Secret.
 Fortify — 1 Shih. Stay put. +2 combat power this turn.
-Feint  — 2 Shih. Declare a target hex. You don't actually move.
-         Both players see the feint direction after resolution.
-         The opponent must guess: was that a probe, a bluff, or fear?
+Ambush  — 2 Shih. Stay put. If an enemy moves to your hex or adjacent hex this turn,
+          +3 power in the resulting combat. The opponent doesn't know you ambushed.
 """
 
 from enum import Enum
 from typing import Optional, Tuple, List, Dict, Any
-from models import Force, ForceRole
+from models import Force
 from state import GameState
+from map_gen import hex_distance
 
 
 class OrderType(Enum):
     MOVE = "Move"
     SCOUT = "Scout"
     FORTIFY = "Fortify"
-    FEINT = "Feint"
+    AMBUSH = "Ambush"
 
 
 # Shih costs
 ORDER_COSTS = {
     OrderType.MOVE: 0,
-    OrderType.SCOUT: 2,
+    OrderType.SCOUT: 3,
     OrderType.FORTIFY: 1,
-    OrderType.FEINT: 2,
+    OrderType.AMBUSH: 2,
 }
 
 
@@ -39,7 +39,7 @@ class Order:
                  scout_target_id: Optional[str] = None):
         self.order_type = order_type
         self.force = force
-        self.target_hex = target_hex          # For Move and Feint
+        self.target_hex = target_hex          # For Move
         self.scout_target_id = scout_target_id  # For Scout: which enemy force to reveal
 
 
@@ -56,6 +56,11 @@ def is_adjacent(current: Tuple[int, int], target: Tuple[int, int]) -> bool:
         (1, 0, -1), (1, -1, 0), (0, -1, 1),
         (-1, 0, 1), (-1, 1, 0), (0, 1, -1),
     ]
+
+
+def within_range(pos1: Tuple[int, int], pos2: Tuple[int, int], max_range: int) -> bool:
+    """Check if two positions are within a given range."""
+    return hex_distance(pos1[0], pos1[1], pos2[0], pos2[1]) <= max_range
 
 
 def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
@@ -80,14 +85,14 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
         if not order.target_hex:
             raise OrderValidationError("Move requires a target hex")
         if not game_state.is_valid_position(order.target_hex):
-            raise OrderValidationError(f"Target {order.target_hex} is off the board")
+            raise OrderValidationError(f"Target {order.target_hex} is off the board or Scorched")
         if not is_adjacent(force.position, order.target_hex):
             raise OrderValidationError(f"Target {order.target_hex} is not adjacent to {force.position}")
 
     elif order.order_type == OrderType.SCOUT:
         if not order.scout_target_id:
             raise OrderValidationError("Scout requires a scout_target_id")
-        # The target must be an enemy force adjacent to this force
+        # The target must be an enemy force within scout range (2 hexes)
         opponent = game_state.get_opponent(player_id)
         if not opponent:
             raise OrderValidationError("No opponent found")
@@ -96,22 +101,17 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
             raise OrderValidationError(f"Enemy force {order.scout_target_id} not found")
         if not target_force.alive:
             raise OrderValidationError(f"Enemy force {order.scout_target_id} is dead")
-        if not is_adjacent(force.position, target_force.position):
+        if not within_range(force.position, target_force.position, 2):
             raise OrderValidationError(
                 f"Enemy force {order.scout_target_id} at {target_force.position} "
-                f"is not adjacent to {force.position}"
+                f"is not within scout range (2) of {force.position}"
             )
 
     elif order.order_type == OrderType.FORTIFY:
         pass  # No additional validation needed
 
-    elif order.order_type == OrderType.FEINT:
-        if not order.target_hex:
-            raise OrderValidationError("Feint requires a target hex")
-        if not game_state.is_valid_position(order.target_hex):
-            raise OrderValidationError(f"Target {order.target_hex} is off the board")
-        if not is_adjacent(force.position, order.target_hex):
-            raise OrderValidationError(f"Target {order.target_hex} is not adjacent to {force.position}")
+    elif order.order_type == OrderType.AMBUSH:
+        pass  # No additional validation needed — just stay put and wait
 
 
 def resolve_orders(
@@ -125,18 +125,17 @@ def resolve_orders(
     Resolution order:
     1. Deduct Shih costs for all orders
     2. Apply Fortify markers
-    3. Record Feints (forces don't actually move)
+    3. Apply Ambush markers
     4. Process Moves simultaneously — detect collisions
-    5. Resolve combats at contested hexes
+    5. Resolve combats at contested hexes (ambush bonus applies here)
     6. Apply Scout revelations
-    7. Clear Fortify markers at end of next resolution
+    7. Clear Fortify/Ambush markers at end of next resolution
 
-    Returns a results dict with combats, scout results, feints, and errors.
+    Returns a results dict with combats, scout results, and errors.
     """
     results: Dict[str, Any] = {
         'combats': [],
         'scouts': [],
-        'feints': [],
         'movements': [],
         'errors': [],
         'sovereign_captured': None,
@@ -144,10 +143,11 @@ def resolve_orders(
 
     all_orders = [(o, 'p1') for o in p1_orders] + [(o, 'p2') for o in p2_orders]
 
-    # Reset fortified status from last turn
+    # Reset fortified/ambushing status from last turn
     for player in game_state.players:
         for force in player.get_alive_forces():
             force.fortified = False
+            force.ambushing = False
 
     # Phase 1: Deduct Shih and validate
     valid_orders: List[tuple] = []
@@ -170,20 +170,13 @@ def resolve_orders(
                 'event': f'{order.force.id} fortifies at {order.force.position}',
             })
 
-    # Phase 3: Record Feints
+    # Phase 3: Apply Ambush
     for order, pid in valid_orders:
-        if order.order_type == OrderType.FEINT:
-            feint_info = {
-                'force_id': order.force.id,
-                'player': pid,
-                'from': order.force.position,
-                'toward': order.target_hex,
-            }
-            results['feints'].append(feint_info)
-            game_state.feints.append(feint_info)
+        if order.order_type == OrderType.AMBUSH:
+            order.force.ambushing = True
             game_state.log.append({
                 'turn': game_state.turn, 'phase': 'resolve',
-                'event': f'{order.force.id} feints toward {order.target_hex}',
+                'event': f'{order.force.id} sets ambush at {order.force.position} (hidden)',
             })
 
     # Phase 4: Process Moves
@@ -206,7 +199,6 @@ def resolve_orders(
 
         if len(mover_players) > 1:
             # Head-on collision: forces from both players moving to same hex
-            # Pick one from each side for combat
             p1_mover = next((o, pid) for o, pid in movers if pid == 'p1')
             p2_mover = next((o, pid) for o, pid in movers if pid == 'p2')
             combats.append({
@@ -277,19 +269,19 @@ def resolve_orders(
             opponent = game_state.get_opponent(pid)
             if player and opponent:
                 target_force = opponent.get_force_by_id(order.scout_target_id)
-                if target_force and target_force.alive and is_adjacent(order.force.position, target_force.position):
+                if target_force and target_force.alive and within_range(order.force.position, target_force.position, 2):
                     # Reveal to this player only (not public)
-                    role_name = target_force.role.value if target_force.role else "Unknown"
-                    player.known_enemy_roles[target_force.id] = role_name
+                    power_val = target_force.power if target_force.power is not None else 0
+                    player.known_enemy_powers[target_force.id] = power_val
                     results['scouts'].append({
                         'scouting_force': order.force.id,
                         'scouted_force': target_force.id,
-                        'revealed_role': role_name,
+                        'revealed_power': power_val,
                         'player': pid,
                     })
                     game_state.log.append({
                         'turn': game_state.turn, 'phase': 'resolve',
-                        'event': f'{order.force.id} scouted {target_force.id}: {role_name} (private to {pid})',
+                        'event': f'{order.force.id} scouted {target_force.id}: power {power_val} (private to {pid})',
                     })
 
     return results

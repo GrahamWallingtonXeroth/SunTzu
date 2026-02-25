@@ -1,30 +1,36 @@
 """
-Upkeep for The Unfought Battle.
+Upkeep for The Unfought Battle v3.
 
 After orders resolve, the board settles. Resources flow. The game checks
 whether anyone has won — not through combat, but through position.
 
+v3 changes:
+- Shrinking board: every shrink_interval turns, outer ring becomes Scorched
+- Domination: control 2 of 3 Contentious hexes for 3 consecutive turns
+- Tighter economy: base income 1, contentious bonus 2
+
 Victory conditions, in order of glory:
-1. Sovereign Capture — you found and destroyed the enemy king. Decisive.
-2. Domination — you held all Contentious ground for 2 consecutive turns.
-   The enemy's position is hopeless; the battle is unfought.
+1. Sovereign Capture — you found and destroyed the power-1 force. Decisive.
+2. Domination — you held 2+ Contentious hexes for 3 consecutive turns.
 3. Elimination — every enemy force is gone. Pyrrhic, but effective.
 """
 
 import json
 import os
 from typing import Dict, Optional, Tuple, List, Any
-from models import Player, Force, Hex, ForceRole
+from models import Player, Force, Hex, SOVEREIGN_POWER
 from state import GameState
-from orders import is_adjacent
+from map_gen import is_scorched, distance_from_center, max_distance_for_shrink_stage
 
 
 def load_upkeep_config() -> Dict:
     defaults = {
-        'base_shih_income': 2,
-        'contentious_shih_bonus': 1,
-        'domination_turns_required': 2,
-        'max_shih': 15,
+        'base_shih_income': 1,
+        'contentious_shih_bonus': 2,
+        'domination_turns_required': 3,
+        'domination_hexes_required': 2,
+        'max_shih': 10,
+        'shrink_interval': 4,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -53,14 +59,55 @@ def get_controlled_contentious(player: Player, game_state: GameState) -> List[Tu
     return controlled
 
 
+def apply_board_shrink(game_state: GameState) -> List[Dict[str, Any]]:
+    """
+    Apply the board shrink (The Noose). Hexes beyond the allowed distance
+    from center become Scorched. Any force on a Scorched hex is killed.
+
+    Returns a list of events (forces killed, hexes scorched).
+    """
+    events = []
+    max_dist = max_distance_for_shrink_stage(game_state.shrink_stage)
+
+    # Scorch hexes
+    for pos, hex_data in game_state.map_data.items():
+        if hex_data.terrain != 'Scorched' and distance_from_center(pos[0], pos[1]) > max_dist:
+            hex_data.terrain = 'Scorched'
+            events.append({
+                'type': 'scorched',
+                'hex': pos,
+            })
+
+    # Kill forces on Scorched hexes
+    for player in game_state.players:
+        for force in player.get_alive_forces():
+            hex_data = game_state.map_data.get(force.position)
+            if hex_data and hex_data.terrain == 'Scorched':
+                force.alive = False
+                events.append({
+                    'type': 'force_scorched',
+                    'force_id': force.id,
+                    'player': player.id,
+                    'position': force.position,
+                    'was_sovereign': force.is_sovereign,
+                })
+                game_state.log.append({
+                    'turn': game_state.turn, 'phase': 'upkeep',
+                    'event': f'{force.id} consumed by the Noose at {force.position}',
+                })
+
+    return events
+
+
 def check_victory(game_state: GameState, combat_sovereign_capture: Optional[Dict] = None) -> Optional[Dict[str, str]]:
     """
     Check all victory conditions. Returns {'winner': id, 'type': reason} or None.
 
     Checked in priority order:
     1. Sovereign Capture (from combat this turn)
-    2. Elimination (all enemy forces dead)
-    3. Domination (all Contentious hexes held for N consecutive turns)
+    2. Sovereign killed by Noose (board shrink)
+    3. Elimination (all enemy forces dead)
+    4. Domination (2+ Contentious hexes held for N consecutive turns)
     """
     # 1. Sovereign Capture — passed in from combat resolution
     if combat_sovereign_capture:
@@ -69,18 +116,29 @@ def check_victory(game_state: GameState, combat_sovereign_capture: Optional[Dict
             'type': 'sovereign_capture',
         }
 
-    # 2. Elimination — check if either player has no alive forces
+    # 2 & 3. Check if either player has lost their Sovereign or all forces
     for player in game_state.players:
-        if len(player.get_alive_forces()) == 0:
+        alive_forces = player.get_alive_forces()
+        # All forces dead = elimination
+        if len(alive_forces) == 0:
             opponent = game_state.get_opponent(player.id)
             if opponent:
                 return {
                     'winner': opponent.id,
                     'type': 'elimination',
                 }
-
-    # 3. Domination — check after updating domination_turns in perform_upkeep
-    # (handled in perform_upkeep to properly track consecutive turns)
+        # Sovereign dead specifically (could be from Noose)
+        sovereign_alive = any(f.is_sovereign for f in alive_forces)
+        if not sovereign_alive and player.deployed:
+            # Check they had a sovereign assigned (game is in progress)
+            had_sovereign = any(f.power == SOVEREIGN_POWER for f in player.forces)
+            if had_sovereign:
+                opponent = game_state.get_opponent(player.id)
+                if opponent:
+                    return {
+                        'winner': opponent.id,
+                        'type': 'sovereign_capture',
+                    }
 
     return None
 
@@ -89,10 +147,12 @@ def perform_upkeep(game_state: GameState, combat_sovereign_capture: Optional[Dic
     """
     Execute the upkeep phase:
     1. Check for immediate victory (Sovereign capture, elimination)
-    2. Apply Shih income (base + Contentious bonus)
-    3. Track domination progress
-    4. Check for domination victory
-    5. Clear turn state and advance
+    2. Apply board shrink (The Noose) if interval reached
+    3. Re-check victory (Noose may have killed Sovereign)
+    4. Apply Shih income (base + Contentious bonus)
+    5. Track domination progress (2 of 3 Contentious for 3 turns)
+    6. Check for domination victory
+    7. Clear turn state and advance
     """
     config = load_upkeep_config()
     results: Dict[str, Any] = {
@@ -101,9 +161,10 @@ def perform_upkeep(game_state: GameState, combat_sovereign_capture: Optional[Dic
         'shih_income': {},
         'contentious_control': {},
         'domination_progress': {},
+        'noose_events': [],
     }
 
-    # Step 1: Immediate victory check (Sovereign capture / elimination)
+    # Step 1: Immediate victory check (Sovereign capture / elimination from combat)
     victory = check_victory(game_state, combat_sovereign_capture)
     if victory:
         results['winner'] = victory['winner']
@@ -117,7 +178,32 @@ def perform_upkeep(game_state: GameState, combat_sovereign_capture: Optional[Dic
         })
         return results
 
-    # Step 2: Shih income
+    # Step 2: Board shrink (The Noose)
+    shrink_interval = config['shrink_interval']
+    if game_state.turn > 0 and game_state.turn % shrink_interval == 0:
+        game_state.shrink_stage += 1
+        game_state.log.append({
+            'turn': game_state.turn, 'phase': 'upkeep',
+            'event': f'The Noose tightens. Shrink stage {game_state.shrink_stage}.',
+        })
+        noose_events = apply_board_shrink(game_state)
+        results['noose_events'] = noose_events
+
+        # Step 3: Re-check victory after Noose
+        victory = check_victory(game_state)
+        if victory:
+            results['winner'] = victory['winner']
+            results['victory_type'] = victory['type']
+            game_state.winner = victory['winner']
+            game_state.victory_type = victory['type']
+            game_state.phase = 'ended'
+            game_state.log.append({
+                'turn': game_state.turn, 'phase': 'upkeep',
+                'event': f"Victory: {victory['winner']} wins by {victory['type']} (after Noose)",
+            })
+            return results
+
+    # Step 4: Shih income
     base_income = config['base_shih_income']
     contentious_bonus = config['contentious_shih_bonus']
 
@@ -138,23 +224,24 @@ def perform_upkeep(game_state: GameState, combat_sovereign_capture: Optional[Dic
             ),
         })
 
-    # Step 3: Domination tracking
+    # Step 5: Domination tracking (2 of 3 Contentious hexes)
     contentious_hexes = [
         pos for pos, h in game_state.map_data.items() if h.terrain == 'Contentious'
     ]
-    domination_required = config['domination_turns_required']
+    domination_required_turns = config['domination_turns_required']
+    domination_required_hexes = config['domination_hexes_required']
 
     for player in game_state.players:
         controlled = get_controlled_contentious(player, game_state)
-        if len(controlled) == len(contentious_hexes) and len(contentious_hexes) > 0:
+        if len(controlled) >= domination_required_hexes and len(contentious_hexes) > 0:
             player.domination_turns += 1
         else:
             player.domination_turns = 0
         results['domination_progress'][player.id] = player.domination_turns
 
-    # Step 4: Domination victory check
+    # Step 6: Domination victory check
     for player in game_state.players:
-        if player.domination_turns >= domination_required:
+        if player.domination_turns >= domination_required_turns:
             results['winner'] = player.id
             results['victory_type'] = 'domination'
             game_state.winner = player.id
@@ -164,13 +251,13 @@ def perform_upkeep(game_state: GameState, combat_sovereign_capture: Optional[Dic
                 'turn': game_state.turn, 'phase': 'upkeep',
                 'event': (
                     f"Victory: {player.id} wins by domination "
-                    f"(held all Contentious hexes for {domination_required} turns)"
+                    f"(held {domination_required_hexes}+ Contentious hexes "
+                    f"for {domination_required_turns} turns)"
                 ),
             })
             return results
 
-    # Step 5: Advance turn
-    game_state.feints = []  # Clear feint data
+    # Step 7: Advance turn
     game_state.turn += 1
     game_state.phase = 'plan'
     game_state.orders_submitted = {}

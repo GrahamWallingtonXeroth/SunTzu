@@ -1,6 +1,9 @@
 """
-Map generation for The Unfought Battle.
+Map generation for The Unfought Battle v3.
 7x7 hex grid with axial coordinates. Tight enough that every hex matters.
+
+New in v3: center-distance calculation to support the shrinking board (Noose).
+Every 4 turns, the outermost ring of hexes becomes Scorched.
 """
 
 import random
@@ -9,6 +12,8 @@ from models import Hex
 
 
 BOARD_SIZE = 7
+CENTER_Q = BOARD_SIZE // 2  # 3
+CENTER_R = BOARD_SIZE // 2  # 3
 
 
 def get_hex_neighbors(q: int, r: int) -> List[Tuple[int, int]]:
@@ -22,9 +27,36 @@ def hex_distance(q1: int, r1: int, q2: int, r2: int) -> int:
     return max(abs(q1 - q2), abs(r1 - r2), abs(-(q1 + r1) + (q2 + r2)))
 
 
+def distance_from_center(q: int, r: int) -> int:
+    """Distance from the board center (3,3). Used for shrinking board."""
+    return hex_distance(q, r, CENTER_Q, CENTER_R)
+
+
+def max_distance_for_shrink_stage(stage: int) -> int:
+    """
+    Return the maximum allowed distance from center for a given shrink stage.
+    Stage 0: full board (max distance 6 — all hexes reachable)
+    Stage 1: distance <= 4
+    Stage 2: distance <= 3
+    Stage 3: distance <= 2
+    Stage 4+: distance <= 1
+    """
+    if stage <= 0:
+        return BOARD_SIZE  # No shrinking
+    limits = {1: 4, 2: 3, 3: 2}
+    return limits.get(stage, 1)
+
+
 def is_valid_hex(q: int, r: int, size: int = BOARD_SIZE) -> bool:
     """Check if hex coordinates are within the board."""
     return 0 <= q < size and 0 <= r < size
+
+
+def is_scorched(q: int, r: int, shrink_stage: int) -> bool:
+    """Check if a hex has been Scorched by the shrinking board."""
+    if shrink_stage <= 0:
+        return False
+    return distance_from_center(q, r) > max_distance_for_shrink_stage(shrink_stage)
 
 
 def a_star_path(
@@ -54,6 +86,8 @@ def a_star_path(
         open_set.remove(current)
         for nq, nr in get_hex_neighbors(current[0], current[1]):
             if not is_valid_hex(nq, nr, size):
+                continue
+            if (nq, nr) in map_data and map_data[(nq, nr)].terrain == 'Scorched':
                 continue
             if avoid_terrain and (nq, nr) in map_data and map_data[(nq, nr)].terrain == avoid_terrain:
                 continue
@@ -141,7 +175,7 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
         else:
             difficult_placed += 1
 
-    # Validate balance: path lengths within ±1 for fairness
+    # Validate balance: path lengths within +/-1 for fairness
     for _ in range(5):
         balanced = True
         for ch in contentious_hexes:

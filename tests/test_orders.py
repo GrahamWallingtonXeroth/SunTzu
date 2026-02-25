@@ -1,25 +1,19 @@
-"""Tests for order processing: Move, Scout, Fortify, Feint."""
+"""Tests for v3 order processing: Move, Scout, Fortify, Ambush."""
 
 import pytest
 from state import initialize_game, apply_deployment, GameState
 from orders import (
-    Order, OrderType, OrderValidationError, is_adjacent,
+    Order, OrderType, OrderValidationError, is_adjacent, within_range,
     validate_order, resolve_orders, ORDER_COSTS,
 )
-from models import Force, ForceRole, Player, Hex
+from models import Force, Player, Hex
 
 
 def make_deployed_game(seed=42):
-    """Helper to create a fully deployed game."""
+    """Helper to create a fully deployed game with power values."""
     game = initialize_game(seed)
-    p1_assign = {
-        'p1_f1': 'Sovereign', 'p1_f2': 'Vanguard', 'p1_f3': 'Vanguard',
-        'p1_f4': 'Scout', 'p1_f5': 'Shield',
-    }
-    p2_assign = {
-        'p2_f1': 'Sovereign', 'p2_f2': 'Vanguard', 'p2_f3': 'Vanguard',
-        'p2_f4': 'Scout', 'p2_f5': 'Shield',
-    }
+    p1_assign = {'p1_f1': 1, 'p1_f2': 5, 'p1_f3': 4, 'p1_f4': 2, 'p1_f5': 3}
+    p2_assign = {'p2_f1': 1, 'p2_f2': 5, 'p2_f3': 4, 'p2_f4': 2, 'p2_f5': 3}
     apply_deployment(game, 'p1', p1_assign)
     apply_deployment(game, 'p2', p2_assign)
     return game
@@ -42,25 +36,37 @@ class TestAdjacency:
         assert is_adjacent((0, 0), (3, 3)) is False
 
 
+class TestWithinRange:
+    def test_within_range_1(self):
+        assert within_range((0, 0), (1, 0), 1) is True
+        assert within_range((0, 0), (2, 0), 1) is False
+
+    def test_within_range_2(self):
+        assert within_range((0, 0), (2, 0), 2) is True
+        assert within_range((0, 0), (3, 0), 2) is False
+
+    def test_same_hex_is_range_0(self):
+        assert within_range((3, 3), (3, 3), 0) is True
+
+
 class TestOrderCosts:
     def test_move_is_free(self):
         assert ORDER_COSTS[OrderType.MOVE] == 0
 
-    def test_scout_costs_2(self):
-        assert ORDER_COSTS[OrderType.SCOUT] == 2
+    def test_scout_costs_3(self):
+        assert ORDER_COSTS[OrderType.SCOUT] == 3
 
     def test_fortify_costs_1(self):
         assert ORDER_COSTS[OrderType.FORTIFY] == 1
 
-    def test_feint_costs_2(self):
-        assert ORDER_COSTS[OrderType.FEINT] == 2
+    def test_ambush_costs_2(self):
+        assert ORDER_COSTS[OrderType.AMBUSH] == 2
 
 
 class TestMoveValidation:
     def test_valid_move(self, game):
         p1 = game.get_player_by_id('p1')
         force = p1.forces[0]
-        # Move to an adjacent empty hex
         neighbors = [(force.position[0] + dq, force.position[1] + dr)
                      for dq, dr in [(1, 0), (0, 1), (1, -1), (-1, 0), (-1, 1), (0, -1)]]
         target = None
@@ -93,6 +99,15 @@ class TestMoveValidation:
         with pytest.raises(OrderValidationError, match="target hex"):
             validate_order(order, game, 'p1')
 
+    def test_move_to_scorched_hex(self, game):
+        p1 = game.get_player_by_id('p1')
+        force = p1.forces[0]  # at (0, 0)
+        target = (1, 0)
+        game.map_data[target].terrain = 'Scorched'
+        order = Order(OrderType.MOVE, force, target_hex=target)
+        with pytest.raises(OrderValidationError, match="Scorched"):
+            validate_order(order, game, 'p1')
+
 
 class TestScoutValidation:
     def test_scout_requires_target_id(self, game):
@@ -104,13 +119,31 @@ class TestScoutValidation:
 
     def test_scout_insufficient_shih(self, game):
         p1 = game.get_player_by_id('p1')
-        p1.shih = 1
+        p1.shih = 2  # Need 3 for scout
         p2 = game.get_player_by_id('p2')
-        # Move an enemy force adjacent
         p2.forces[0].position = (1, 0)
-        force = p1.forces[0]  # at (0,0)
+        force = p1.forces[0]
         order = Order(OrderType.SCOUT, force, scout_target_id=p2.forces[0].id)
         with pytest.raises(OrderValidationError, match="Insufficient Shih"):
+            validate_order(order, game, 'p1')
+
+    def test_scout_within_range_2(self, game):
+        """Scout can target enemies within 2 hexes, not just adjacent."""
+        p1 = game.get_player_by_id('p1')
+        p2 = game.get_player_by_id('p2')
+        p1.forces[0].position = (3, 3)
+        p2.forces[0].position = (5, 3)  # Distance 2
+        order = Order(OrderType.SCOUT, p1.forces[0], scout_target_id=p2.forces[0].id)
+        validate_order(order, game, 'p1')  # Should not raise
+
+    def test_scout_out_of_range(self, game):
+        """Scout cannot target enemies beyond 2 hexes."""
+        p1 = game.get_player_by_id('p1')
+        p2 = game.get_player_by_id('p2')
+        p1.forces[0].position = (0, 0)
+        p2.forces[0].position = (6, 6)  # Way too far
+        order = Order(OrderType.SCOUT, p1.forces[0], scout_target_id=p2.forces[0].id)
+        with pytest.raises(OrderValidationError, match="not within scout range"):
             validate_order(order, game, 'p1')
 
 
@@ -130,12 +163,19 @@ class TestFortifyValidation:
             validate_order(order, game, 'p1')
 
 
-class TestFeintValidation:
-    def test_feint_requires_target(self, game):
+class TestAmbushValidation:
+    def test_ambush_valid(self, game):
         p1 = game.get_player_by_id('p1')
         force = p1.forces[0]
-        order = Order(OrderType.FEINT, force)
-        with pytest.raises(OrderValidationError, match="target hex"):
+        order = Order(OrderType.AMBUSH, force)
+        validate_order(order, game, 'p1')  # Should not raise
+
+    def test_ambush_insufficient_shih(self, game):
+        p1 = game.get_player_by_id('p1')
+        p1.shih = 1  # Need 2 for ambush
+        force = p1.forces[0]
+        order = Order(OrderType.AMBUSH, force)
+        with pytest.raises(OrderValidationError, match="Insufficient Shih"):
             validate_order(order, game, 'p1')
 
 
@@ -144,7 +184,6 @@ class TestOrderResolution:
         p1 = game.get_player_by_id('p1')
         force = p1.forces[0]
         old_pos = force.position
-        # Find an empty adjacent hex
         target = None
         for dq, dr in [(1, 0), (0, 1), (1, -1), (-1, 0), (-1, 1), (0, -1)]:
             candidate = (old_pos[0] + dq, old_pos[1] + dr)
@@ -173,24 +212,27 @@ class TestOrderResolution:
         resolve_orders(p1_orders, [], game)
         assert p1.shih == old_shih - 1
 
-    def test_feint_does_not_move(self, game):
+    def test_ambush_sets_flag(self, game):
         p1 = game.get_player_by_id('p1')
         force = p1.forces[0]
-        old_pos = force.position
-        target = (old_pos[0] + 1, old_pos[1])
-        if game.is_valid_position(target):
-            p1_orders = [Order(OrderType.FEINT, force, target_hex=target)]
-            results = resolve_orders(p1_orders, [], game)
-            assert force.position == old_pos  # Didn't move
-            assert len(results['feints']) == 1
-            assert results['feints'][0]['toward'] == target
+        assert force.ambushing is False
+        p1_orders = [Order(OrderType.AMBUSH, force)]
+        resolve_orders(p1_orders, [], game)
+        assert force.ambushing is True
+
+    def test_ambush_deducts_shih(self, game):
+        p1 = game.get_player_by_id('p1')
+        force = p1.forces[0]
+        old_shih = p1.shih
+        p1_orders = [Order(OrderType.AMBUSH, force)]
+        resolve_orders(p1_orders, [], game)
+        assert p1.shih == old_shih - 2
 
     def test_move_into_enemy_triggers_combat(self, game):
         p1 = game.get_player_by_id('p1')
         p2 = game.get_player_by_id('p2')
         attacker = p1.forces[0]
         defender = p2.forces[0]
-        # Place them adjacent
         attacker.position = (3, 3)
         defender.position = (4, 3)
         game.map_data[(3, 3)] = Hex(q=3, r=3, terrain='Open')
@@ -200,12 +242,11 @@ class TestOrderResolution:
         results = resolve_orders(p1_orders, [], game)
         assert len(results['combats']) == 1
 
-    def test_scout_reveals_role_privately(self, game):
+    def test_scout_reveals_power_privately(self, game):
         p1 = game.get_player_by_id('p1')
         p2 = game.get_player_by_id('p2')
-        scout_force = p1.forces[3]  # Scout role
-        target_force = p2.forces[0]  # Sovereign
-        # Place adjacent
+        scout_force = p1.forces[3]  # power 2
+        target_force = p2.forces[0]  # power 1 (Sovereign)
         scout_force.position = (3, 3)
         target_force.position = (4, 3)
         game.map_data[(3, 3)] = Hex(q=3, r=3, terrain='Open')
@@ -214,16 +255,15 @@ class TestOrderResolution:
         p1_orders = [Order(OrderType.SCOUT, scout_force, scout_target_id=target_force.id)]
         results = resolve_orders(p1_orders, [], game)
         assert len(results['scouts']) == 1
-        assert results['scouts'][0]['revealed_role'] == 'Sovereign'
-        assert target_force.id in p1.known_enemy_roles
+        assert results['scouts'][0]['revealed_power'] == 1
+        assert target_force.id in p1.known_enemy_powers
         assert target_force.revealed is False  # Not publicly revealed
 
     def test_simultaneous_collision(self, game):
         p1 = game.get_player_by_id('p1')
         p2 = game.get_player_by_id('p2')
-        f1 = p1.forces[1]  # Vanguard
-        f2 = p2.forces[1]  # Vanguard
-        # Place them so they can both move to the same hex
+        f1 = p1.forces[1]  # power 5
+        f2 = p2.forces[1]  # power 5
         f1.position = (2, 3)
         f2.position = (4, 3)
         target = (3, 3)

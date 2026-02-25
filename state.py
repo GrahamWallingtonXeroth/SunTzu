@@ -1,10 +1,15 @@
 """
-Game state management for The Unfought Battle.
+Game state management for The Unfought Battle v3.
 
 The state is the source of truth, but it's not the whole truth.
 Each player sees a filtered view — their own forces in full,
-enemy forces as anonymous tokens. What you know depends on
+enemy forces only within visibility range. What you know depends on
 what you've scouted and who you've fought.
+
+v3 changes:
+- Power values (1-5) replace fixed roles
+- Fog of war: visibility range 2
+- Shrinking board (shrink_stage)
 """
 
 from __future__ import annotations
@@ -13,8 +18,8 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any
-from map_gen import generate_map, BOARD_SIZE, is_valid_hex
-from models import Force, Player, Hex, ForceRole, ROLE_COUNTS
+from map_gen import generate_map, BOARD_SIZE, is_valid_hex, hex_distance, is_scorched
+from models import Force, Player, Hex, POWER_VALUES
 
 
 @dataclass
@@ -30,8 +35,7 @@ class GameState:
     winner: Optional[str] = None
     victory_type: Optional[str] = None
     board_size: int = BOARD_SIZE
-    # Tracks feints this turn for the reveal phase
-    feints: List[Dict[str, Any]] = field(default_factory=list)
+    shrink_stage: int = 0  # Increments every shrink_interval turns
 
     def get_player_by_id(self, player_id: str) -> Optional[Player]:
         for player in self.players:
@@ -60,16 +64,24 @@ class GameState:
         return None
 
     def is_valid_position(self, position: Tuple[int, int]) -> bool:
-        return is_valid_hex(position[0], position[1], self.board_size)
+        if not is_valid_hex(position[0], position[1], self.board_size):
+            return False
+        hex_data = self.map_data.get(position)
+        if hex_data and hex_data.terrain == 'Scorched':
+            return False
+        return True
 
 
 def load_config() -> Dict:
     """Load game configuration with defaults."""
     defaults = {
-        'starting_shih': 8,
-        'max_shih': 15,
+        'starting_shih': 5,
+        'max_shih': 10,
         'force_count': 5,
         'board_size': 7,
+        'visibility_range': 2,
+        'shrink_interval': 4,
+        'scout_range': 2,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -86,12 +98,12 @@ def initialize_game(seed: int) -> GameState:
     Create a new game in the deployment phase.
 
     Players start at opposite corners of the 7x7 board with 5 unassigned forces.
-    Roles must be assigned via the deploy endpoint before play begins.
+    Power values must be assigned via the deploy endpoint before play begins.
     """
     config = load_config()
     board_size = config.get('board_size', BOARD_SIZE)
-    starting_shih = config.get('starting_shih', 8)
-    max_shih = config.get('max_shih', 15)
+    starting_shih = config.get('starting_shih', 5)
+    max_shih = config.get('max_shih', 10)
     force_count = config.get('force_count', 5)
 
     game_id = str(uuid.uuid4())
@@ -124,26 +136,23 @@ def initialize_game(seed: int) -> GameState:
     )
 
 
-def validate_deployment(assignments: Dict[str, str]) -> Optional[str]:
+def validate_deployment(assignments: Dict[str, int]) -> Optional[str]:
     """
-    Validate that a role assignment is legal.
-    Must have exactly: 1 Sovereign, 2 Vanguard, 1 Scout, 1 Shield.
+    Validate that a power assignment is legal.
+    Must assign each of values 1-5 exactly once across the 5 forces.
     Returns error message or None if valid.
     """
-    role_counts: Dict[str, int] = {}
-    for role_str in assignments.values():
-        role_counts[role_str] = role_counts.get(role_str, 0) + 1
-
-    for role, required in ROLE_COUNTS.items():
-        actual = role_counts.get(role.value, 0)
-        if actual != required:
-            return f"Need exactly {required} {role.value}, got {actual}"
+    values = list(assignments.values())
+    if len(values) != len(POWER_VALUES):
+        return f"Must assign exactly {len(POWER_VALUES)} power values, got {len(values)}"
+    if set(values) != POWER_VALUES:
+        return f"Must use each power value (1-5) exactly once, got {sorted(values)}"
     return None
 
 
-def apply_deployment(game_state: GameState, player_id: str, assignments: Dict[str, str]) -> Optional[str]:
+def apply_deployment(game_state: GameState, player_id: str, assignments: Dict[str, int]) -> Optional[str]:
     """
-    Assign roles to a player's forces. Returns error message or None.
+    Assign power values to a player's forces. Returns error message or None.
     """
     player = game_state.get_player_by_id(player_id)
     if not player:
@@ -158,17 +167,17 @@ def apply_deployment(game_state: GameState, player_id: str, assignments: Dict[st
 
     # Validate all forces are assigned
     if len(assignments) != len(player.forces):
-        return f"Must assign roles to all {len(player.forces)} forces"
+        return f"Must assign power to all {len(player.forces)} forces"
 
-    # Validate role composition
+    # Validate power composition (each of 1-5 exactly once)
     error = validate_deployment(assignments)
     if error:
         return error
 
-    # Apply roles
-    for force_id, role_str in assignments.items():
+    # Apply power values
+    for force_id, power_val in assignments.items():
         force = player.get_force_by_id(force_id)
-        force.role = ForceRole(role_str)
+        force.power = power_val
 
     player.deployed = True
 
@@ -191,20 +200,26 @@ def apply_deployment(game_state: GameState, player_id: str, assignments: Dict[st
     return None
 
 
+def is_visible_to_player(position: Tuple[int, int], player: Player, visibility_range: int = 2) -> bool:
+    """Check if a position is within visibility range of any of the player's alive forces."""
+    for force in player.get_alive_forces():
+        if hex_distance(force.position[0], force.position[1], position[0], position[1]) <= visibility_range:
+            return True
+    return False
+
+
 def get_player_view(game_state: GameState, player_id: str) -> Dict:
     """
     Return the game state as seen by a specific player.
 
-    You see:
-    - Your own forces with full details (role, position)
-    - Enemy forces as anonymous tokens (position only)
-    - Enemy roles you've discovered through scouting or combat
-    - The full map
-
-    You don't see:
-    - Enemy roles you haven't discovered
-    - What the enemy has scouted about you
+    v3 fog of war:
+    - You can only see enemy forces within visibility range (2 hexes) of your alive forces
+    - Enemy forces outside visibility are not shown at all
+    - Power values you've discovered through scouting or combat are shown
     """
+    config = load_config()
+    visibility_range = config.get('visibility_range', 2)
+
     player = game_state.get_player_by_id(player_id)
     opponent = game_state.get_opponent(player_id)
 
@@ -217,26 +232,35 @@ def get_player_view(game_state: GameState, player_id: str) -> Dict:
         own_forces.append({
             'id': f.id,
             'position': {'q': f.position[0], 'r': f.position[1]},
-            'role': f.role.value if f.role else None,
+            'power': f.power,
             'revealed': f.revealed,
             'fortified': f.fortified,
         })
 
-    # Enemy forces: position only, plus any roles you've learned
+    # Enemy forces: only those within visibility range
     enemy_forces = []
     for f in opponent.get_alive_forces():
+        if not is_visible_to_player(f.position, player, visibility_range):
+            continue  # Not visible — fog of war
         force_data: Dict[str, Any] = {
             'id': f.id,
             'position': {'q': f.position[0], 'r': f.position[1]},
         }
-        # Include role if publicly revealed (combat) or privately scouted
+        # Include power if publicly revealed (combat) or privately scouted
         if f.revealed:
-            force_data['role'] = f.role.value if f.role else None
+            force_data['power'] = f.power
             force_data['revealed'] = True
-        elif f.id in player.known_enemy_roles:
-            force_data['role'] = player.known_enemy_roles[f.id]
+        elif f.id in player.known_enemy_powers:
+            force_data['power'] = player.known_enemy_powers[f.id]
             force_data['scouted'] = True
         enemy_forces.append(force_data)
+
+    # Map: show terrain, mark Scorched hexes
+    map_view = []
+    for pos, h in game_state.map_data.items():
+        map_view.append({
+            'q': pos[0], 'r': pos[1], 'terrain': h.terrain,
+        })
 
     return {
         'game_id': game_state.game_id,
@@ -253,9 +277,6 @@ def get_player_view(game_state: GameState, player_id: str) -> Dict:
         'orders_submitted': game_state.orders_submitted.copy(),
         'winner': game_state.winner,
         'victory_type': game_state.victory_type,
-        'feints': game_state.feints,
-        'map': [
-            {'q': pos[0], 'r': pos[1], 'terrain': h.terrain}
-            for pos, h in game_state.map_data.items()
-        ],
+        'shrink_stage': game_state.shrink_stage,
+        'map': map_view,
     }
