@@ -65,6 +65,8 @@ class GameRecord:
     unique_positions: int = 0  # unique hexes occupied across game
     per_power_orders: Dict[int, Dict[str, int]] = field(default_factory=dict)
     moves_used: int = 0  # free moves (for decision density)
+    # --- Per-turn snapshots for narrative analysis ---
+    turn_snapshots: List[Dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1405,6 +1407,60 @@ def run_game(
                 if controlled:
                     record.contentious_control_turns[pid] = \
                         record.contentious_control_turns.get(pid, 0) + 1
+
+        # --- Per-turn snapshot for narrative analysis ---
+        snap = {
+            'turn': game.turn,
+            'p1_alive': 0, 'p2_alive': 0,
+            'p1_power_sum': 0, 'p2_power_sum': 0,
+            'p1_contentious': 0, 'p2_contentious': 0,
+            'p1_shih': 0, 'p2_shih': 0,
+            'combats_this_turn': len(result.get('combats', [])),
+            'p1_killed_this_turn': 0, 'p2_killed_this_turn': 0,
+            'p1_hidden_to_opp': 0, 'p2_hidden_to_opp': 0,
+            'p1_orders': dict(counts) if counts else {},
+            'p2_orders': {},
+            'shrink_stage': game.shrink_stage,
+        }
+        for pid in ['p1', 'p2']:
+            p = game.get_player_by_id(pid)
+            opp = game.get_opponent(pid)
+            if not p:
+                continue
+            alive = p.get_alive_forces()
+            prefix = pid
+            snap[f'{prefix}_alive'] = len(alive)
+            snap[f'{prefix}_power_sum'] = sum(f.power for f in alive if f.power)
+            snap[f'{prefix}_shih'] = p.shih
+            # Count forces hidden from opponent
+            if opp:
+                hidden = sum(1 for f in alive if not f.revealed
+                             and f.id not in opp.known_enemy_powers)
+                snap[f'{prefix}_hidden_to_opp'] = hidden
+        # Count kills this turn by comparing to last snapshot
+        if record.turn_snapshots:
+            prev = record.turn_snapshots[-1]
+            snap['p1_killed_this_turn'] = max(0, prev['p1_alive'] - snap['p1_alive'])
+            snap['p2_killed_this_turn'] = max(0, prev['p2_alive'] - snap['p2_alive'])
+        # p2 order counts (separate from p1's in the `counts` var)
+        p2_counts_this_turn = {}
+        for o in p2_orders:
+            key = o.order_type.value.lower()
+            p2_counts_this_turn[key] = p2_counts_this_turn.get(key, 0) + 1
+        snap['p2_orders'] = p2_counts_this_turn
+        # p1 order counts (recalculate to be player-specific)
+        p1_counts_this_turn = {}
+        for o in p1_orders:
+            key = o.order_type.value.lower()
+            p1_counts_this_turn[key] = p1_counts_this_turn.get(key, 0) + 1
+        snap['p1_orders'] = p1_counts_this_turn
+        # Contentious control this turn
+        for pid in ['p1', 'p2']:
+            p = game.get_player_by_id(pid)
+            if p:
+                from upkeep import get_controlled_contentious as _gcc
+                snap[f'{pid}_contentious'] = len(_gcc(p, game))
+        record.turn_snapshots.append(snap)
 
         if upkeep.get('winner'):
             record.winner = upkeep['winner']
