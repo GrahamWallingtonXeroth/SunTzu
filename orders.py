@@ -39,6 +39,7 @@ def _load_order_config() -> Dict:
         'ambush_cost': 2,
         'charge_cost': 1,
         'supply_range': 3,
+        'max_supply_hops': 0,  # 0 = unlimited chain, >0 = max chain links
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -97,7 +98,8 @@ def within_range(pos1: Tuple[int, int], pos2: Tuple[int, int], max_range: int) -
     return hex_distance(pos1[0], pos1[1], pos2[0], pos2[1]) <= max_range
 
 
-def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3) -> bool:
+def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3,
+               max_hops: int = 0) -> bool:
     """
     Check if a force has supply.
 
@@ -105,6 +107,10 @@ def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3) 
     1. It IS the Sovereign, or
     2. It can be reached via a chain of friendly alive forces back to the Sovereign,
        where each link in the chain is within supply_range hexes.
+
+    max_hops: maximum chain links allowed (0 = unlimited). When set to 1,
+    a force must be directly within supply_range of the Sovereign — no relay.
+    When set to 2, one intermediate relay is allowed, etc.
 
     Uses BFS from the Sovereign outward.
     """
@@ -124,11 +130,11 @@ def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3) 
         return False  # Sovereign dead = no supply for anyone
 
     # BFS: start from Sovereign, spread supply through chain
-    supplied = {sovereign.id}
-    queue = [sovereign]
+    supplied = {sovereign.id: 0}  # id -> hop count
+    queue = [(sovereign, 0)]
 
     while queue:
-        current = queue.pop(0)
+        current, hops = queue.pop(0)
         for f in alive_forces:
             if f.id not in supplied:
                 dist = hex_distance(
@@ -136,8 +142,12 @@ def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3) 
                     f.position[0], f.position[1]
                 )
                 if dist <= supply_range:
-                    supplied.add(f.id)
-                    queue.append(f)
+                    new_hops = hops + 1
+                    # If max_hops is set, don't chain beyond that depth
+                    if max_hops > 0 and new_hops > max_hops:
+                        continue
+                    supplied[f.id] = new_hops
+                    queue.append((f, new_hops))
 
     return force.id in supplied
 
@@ -164,7 +174,8 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
     if order.order_type in (OrderType.SCOUT, OrderType.FORTIFY, OrderType.AMBUSH, OrderType.CHARGE):
         cfg = _load_order_config()
         supply_range = cfg['supply_range']
-        if not has_supply(force, player.forces, supply_range):
+        max_hops = cfg['max_supply_hops']
+        if not has_supply(force, player.forces, supply_range, max_hops=max_hops):
             raise OrderValidationError(
                 f"Force {force.id} has no supply line to Sovereign — can only Move"
             )
