@@ -1,28 +1,15 @@
-"""Tests for the data model layer."""
+"""Tests for the v3 data model layer — power values instead of roles."""
 
 import pytest
-from models import Force, Player, ForceRole, ROLE_POWER, ROLE_COUNTS, Hex
+from models import Force, Player, Hex, POWER_VALUES, SOVEREIGN_POWER
 
 
-class TestForceRole:
-    def test_role_values(self):
-        assert ForceRole.SOVEREIGN.value == "Sovereign"
-        assert ForceRole.VANGUARD.value == "Vanguard"
-        assert ForceRole.SCOUT.value == "Scout"
-        assert ForceRole.SHIELD.value == "Shield"
+class TestPowerValues:
+    def test_power_values_are_1_through_5(self):
+        assert POWER_VALUES == {1, 2, 3, 4, 5}
 
-    def test_role_power(self):
-        assert ROLE_POWER[ForceRole.SOVEREIGN] == 1
-        assert ROLE_POWER[ForceRole.VANGUARD] == 4
-        assert ROLE_POWER[ForceRole.SCOUT] == 2
-        assert ROLE_POWER[ForceRole.SHIELD] == 3
-
-    def test_role_counts(self):
-        assert ROLE_COUNTS[ForceRole.SOVEREIGN] == 1
-        assert ROLE_COUNTS[ForceRole.VANGUARD] == 2
-        assert ROLE_COUNTS[ForceRole.SCOUT] == 1
-        assert ROLE_COUNTS[ForceRole.SHIELD] == 1
-        assert sum(ROLE_COUNTS.values()) == 5
+    def test_sovereign_is_power_1(self):
+        assert SOVEREIGN_POWER == 1
 
 
 class TestForce:
@@ -30,33 +17,39 @@ class TestForce:
         f = Force(id='p1_f1', position=(0, 0))
         assert f.id == 'p1_f1'
         assert f.position == (0, 0)
-        assert f.role is None
+        assert f.power is None
         assert f.revealed is False
         assert f.alive is True
         assert f.fortified is False
+        assert f.ambushing is False
+        assert f.charging is False
 
-    def test_base_power_no_role(self):
+    def test_is_sovereign_when_power_1(self):
+        f = Force(id='p1_f1', position=(0, 0), power=1)
+        assert f.is_sovereign is True
+
+    def test_is_not_sovereign_when_other_power(self):
+        f = Force(id='p1_f1', position=(0, 0), power=5)
+        assert f.is_sovereign is False
+
+    def test_is_not_sovereign_when_no_power(self):
         f = Force(id='p1_f1', position=(0, 0))
-        assert f.base_power == 0
+        assert f.is_sovereign is False
 
-    def test_base_power_with_role(self):
-        f = Force(id='p1_f1', position=(0, 0), role=ForceRole.VANGUARD)
-        assert f.base_power == 4
-
-    def test_base_power_sovereign(self):
-        f = Force(id='p1_f1', position=(0, 0), role=ForceRole.SOVEREIGN)
-        assert f.base_power == 1
+    def test_power_values_assigned(self):
+        f = Force(id='p1_f1', position=(0, 0), power=4)
+        assert f.power == 4
 
 
 class TestPlayer:
     def test_create_player(self):
         p = Player(id='p1')
-        assert p.shih == 8
-        assert p.max_shih == 15
+        assert p.shih == 4
+        assert p.max_shih == 8
         assert p.deployed is False
         assert p.domination_turns == 0
         assert len(p.forces) == 0
-        assert len(p.known_enemy_roles) == 0
+        assert len(p.known_enemy_powers) == 0
 
     def test_add_force(self):
         p = Player(id='p1')
@@ -73,8 +66,8 @@ class TestPlayer:
 
     def test_get_alive_forces(self):
         p = Player(id='p1')
-        f1 = Force(id='p1_f1', position=(0, 0), role=ForceRole.VANGUARD)
-        f2 = Force(id='p1_f2', position=(1, 0), role=ForceRole.SOVEREIGN)
+        f1 = Force(id='p1_f1', position=(0, 0), power=4)
+        f2 = Force(id='p1_f2', position=(1, 0), power=1)
         f2.alive = False
         p.add_force(f1)
         p.add_force(f2)
@@ -83,13 +76,25 @@ class TestPlayer:
         assert alive[0].id == 'p1_f1'
 
     def test_update_shih_caps(self):
-        p = Player(id='p1', shih=8, max_shih=15)
+        p = Player(id='p1', shih=4, max_shih=8)
         p.update_shih(100)
-        assert p.shih == 15
+        assert p.shih == 8
         p.update_shih(-100)
         assert p.shih == 0
 
-    def test_known_enemy_roles(self):
+    def test_known_enemy_powers(self):
         p = Player(id='p1')
-        p.known_enemy_roles['p2_f1'] = 'Vanguard'
-        assert p.known_enemy_roles['p2_f1'] == 'Vanguard'
+        p.known_enemy_powers['p2_f1'] = 4
+        assert p.known_enemy_powers['p2_f1'] == 4
+
+
+class TestHex:
+    def test_create_hex(self):
+        h = Hex(q=3, r=3, terrain='Open')
+        assert h.q == 3
+        assert h.r == 3
+        assert h.terrain == 'Open'
+
+    def test_scorched_terrain(self):
+        h = Hex(q=0, r=0, terrain='Scorched')
+        assert h.terrain == 'Scorched'

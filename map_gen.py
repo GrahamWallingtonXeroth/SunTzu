@@ -1,6 +1,9 @@
 """
-Map generation for The Unfought Battle.
+Map generation for The Unfought Battle v10.
 7x7 hex grid with axial coordinates. Tight enough that every hex matters.
+
+v10: Strategic reasoning benchmark. Metagame rebalanced with multi-tier pool.
+v9: Wider starting separation.
 """
 
 import random
@@ -9,6 +12,8 @@ from models import Hex
 
 
 BOARD_SIZE = 7
+CENTER_Q = BOARD_SIZE // 2  # 3
+CENTER_R = BOARD_SIZE // 2  # 3
 
 
 def get_hex_neighbors(q: int, r: int) -> List[Tuple[int, int]]:
@@ -22,9 +27,37 @@ def hex_distance(q1: int, r1: int, q2: int, r2: int) -> int:
     return max(abs(q1 - q2), abs(r1 - r2), abs(-(q1 + r1) + (q2 + r2)))
 
 
+def distance_from_center(q: int, r: int) -> int:
+    """Distance from the board center (3,3). Used for shrinking board."""
+    return hex_distance(q, r, CENTER_Q, CENTER_R)
+
+
+def max_distance_for_shrink_stage(stage: int) -> int:
+    """
+    Return the maximum allowed distance from center for a given shrink stage.
+    Stage 0: full board (max distance 6 — all hexes reachable)
+    Stage 1: distance <= 5 (only far corners scorched)
+    Stage 2: distance <= 4
+    Stage 3: distance <= 3
+    Stage 4: distance <= 2
+    Stage 5+: distance <= 1
+    """
+    if stage <= 0:
+        return BOARD_SIZE  # No shrinking
+    limits = {1: 5, 2: 4, 3: 3, 4: 2}
+    return limits.get(stage, 1)
+
+
 def is_valid_hex(q: int, r: int, size: int = BOARD_SIZE) -> bool:
     """Check if hex coordinates are within the board."""
     return 0 <= q < size and 0 <= r < size
+
+
+def is_scorched(q: int, r: int, shrink_stage: int) -> bool:
+    """Check if a hex has been Scorched by the shrinking board."""
+    if shrink_stage <= 0:
+        return False
+    return distance_from_center(q, r) > max_distance_for_shrink_stage(shrink_stage)
 
 
 def a_star_path(
@@ -55,6 +88,8 @@ def a_star_path(
         for nq, nr in get_hex_neighbors(current[0], current[1]):
             if not is_valid_hex(nq, nr, size):
                 continue
+            if (nq, nr) in map_data and map_data[(nq, nr)].terrain == 'Scorched':
+                continue
             if avoid_terrain and (nq, nr) in map_data and map_data[(nq, nr)].terrain == avoid_terrain:
                 continue
             tentative = g_score[current] + 1
@@ -72,7 +107,7 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
     Generate a 7x7 hex map.
 
     Layout:
-    - Players start at opposite corners: P1 at (0,0), P2 at (6,6)
+    - P1 starts left cluster (distance 2-4 from center), P2 right cluster (symmetric)
     - 3 Contentious hexes clustered in the center — the objectives
     - Difficult terrain scattered to create chokepoints and cover
     - Both players have equal path lengths to the center
@@ -85,8 +120,13 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
         for r in range(size):
             map_data[(q, r)] = Hex(q=q, r=r, terrain='Open')
 
-    p1_start = (0, 0)
-    p2_start = (size - 1, size - 1)
+    # Starting positions: cluster centers for path balance
+    p1_start = (0, 2)
+    p2_start = (6, 4)
+
+    # All starting positions (for protected zone calculation)
+    p1_positions = [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2)]
+    p2_positions = [(6, 5), (6, 4), (6, 3), (5, 5), (5, 4)]
 
     # Place 3 Contentious hexes in the center zone (q=2-4, r=2-4)
     center_min = size // 2 - 1  # 2
@@ -102,14 +142,10 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
     for pos in contentious_hexes:
         map_data[pos].terrain = 'Contentious'
 
-    # Protect starting zones and paths to center from becoming Difficult
+    # Protect starting positions from becoming Difficult
     protected: set = set()
-    # Starting positions and their immediate neighbors
-    for start in [p1_start, p2_start]:
+    for start in p1_positions + p2_positions:
         protected.add(start)
-        for n in get_hex_neighbors(start[0], start[1]):
-            if is_valid_hex(n[0], n[1], size):
-                protected.add(n)
     # Contentious hexes are never Difficult
     for pos in contentious_hexes:
         protected.add(pos)
@@ -141,7 +177,7 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
         else:
             difficult_placed += 1
 
-    # Validate balance: path lengths within ±1 for fairness
+    # Validate balance: path lengths within +/-1 for fairness
     for _ in range(5):
         balanced = True
         for ch in contentious_hexes:

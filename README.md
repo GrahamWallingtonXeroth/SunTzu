@@ -1,241 +1,152 @@
-# Sun Tzu: The Unfought Battle - Core Game Engine API
+# Sun Tzu: The Unfought Battle v10
 
 ## Overview
-This repository contains the fully implemented backend API for "Sun Tzu: The Unfought Battle," a sophisticated turn-based strategy simulation inspired by Sun Tzu's *The Art of War*. It's a headless (no UI) Python/Flask API for simulating strategic games, focusing on deception, terrain control, and psychological warfare. Serves dual purposes: engaging strategic gameplay and AI research platform.
 
-## Key Features Implemented
+A turn-based strategy game built as a headless Python/Flask API, designed as a
+**benchmark for measuring strategic reasoning in LLM-based agents** under
+incomplete information.
 
-Key Features:
-- Procedural hex grid map generation (10x10 hexes with Open, Difficult, Contentious terrains).
-- Player resources: Chi (morale), Shih (momentum).
-- Orders: Advance, Meditate, Deceive (with ghosts).
-- Confrontations: Rock-paper-scissors stances (Mountain, River, Thunder).
-- Victory paths: Demoralization, Domination, Deception Mastery.
-- API endpoints for game creation, state, actions, logs.
-=======
-### Core Game Systems
-- **Procedural Map Generation**: 25x20 hex grid with balanced terrain placement using Perlin noise
-- **Three Terrain Types**: Open (standard), Difficult (defensive advantage), Contentious (strategic objectives)
-- **Resource Management**: Chi (morale, 100 starting) and Shih (momentum, 10 starting, max 20)
-- **Strategic Orders**: Advance (movement + confrontation), Meditate (resource + intelligence), Deceive (ghost creation)
+Each player deploys 5 forces with **hidden power values** (1-5, each used
+exactly once). Power 1 is the **Sovereign** — lose it, lose the game. Every
+force looks identical to the opponent. The game is about information asymmetry:
+what you know, what you don't, and what you can make your opponent believe.
 
-### Advanced Mechanics  
-- **Rock-Paper-Scissors Combat**: Mountain > Thunder > River > Mountain with terrain modifiers
-- **Tendency System**: AI behavior tracking (last 3 orders) affecting confrontation outcomes
-- **Encirclement Penalties**: Forces surrounded for 2+ turns lose 20 Chi
-- **Phase-Based Turns**: Plan → Execute → Upkeep cycle with strict validation
+## v10: Strategic Reasoning Benchmark
+
+v10 transforms the game into a measurement platform for LLM strategic reasoning:
+
+- **Noisy scouting**: Scout reveals exact power with probability 0.7, otherwise
+  returns a band (low 1-2, mid 3, high 4-5). Increases inference requirements.
+- **Benchmark telemetry**: Per-turn belief distributions, action predictions,
+  Brier score, log loss, calibration error, information gain, theory-of-mind delta.
+- **Balance restored**: 3+ replicator survivors, multi-tier competitive pool,
+  intransitive cycles enforced. Charge bonus +2, ambush bonus +2, sovereign
+  defense removed, domination requires 4 turns.
+- **LLM agent interface**: Abstract `LLMAgent` class + `MockLLMAgent` for
+  testing the harness without API calls.
+
+## Game Mechanics
+
+### Orders (5 types)
+- **Move** (free): Adjacent hex movement. Always available.
+- **Charge** (2 Shih): Move up to 2 hexes, +2 attack bonus. Requires supply.
+- **Scout** (2 Shih): Noisy intel on one enemy within 2 hexes. Requires supply.
+- **Fortify** (2 Shih): +2 defense this turn. Requires supply.
+- **Ambush** (3 Shih): +2 defense, hidden from opponent. Requires supply.
+
+### Supply Chain
+Forces must chain back to the Sovereign (max 2 hops, range 2) to use
+special orders. Broken supply = Move only.
+
+### Combat
+`effective_power = base_power + modifiers + random(±2)`. Both power values are
+permanently revealed after combat. Losers retreat if power difference ≤ 2,
+otherwise eliminated.
+
+### The Noose
+Every 5 turns, the outermost ring of hexes becomes Scorched. Forces on
+Scorched hexes die. Creates endgame pressure.
 
 ### Victory Conditions
-- **Demoralization**: Opponent Chi ≤ 0
-- **Domination**: Control all Contentious terrain
-- **Encirclement**: Extended surrounding causes Chi penalties leading to demoralization
-
-### API Features
-- **RESTful Endpoints**: Complete game lifecycle management
-- **Real-time State**: JSON-based game state with order submission tracking  
-- **Comprehensive Logging**: Detailed event logs for game analysis and replay
-- **Error Handling**: Robust validation with detailed error messages
-
-## Setup and Installation
-
-### Prerequisites
-- Python 3.12+ (tested on 3.12)
-- pip package manager
-
-### Installation Steps
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/GrahamWallingtonXeroth/SunTzu.git
-   cd SunTzu
-   ```
-
-2. **Create and activate virtual environment**:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Run the API server**:
-   ```bash
-   python app.py
-   ```
-
-   The API will be available at `http://localhost:5000`
-
-### Dependencies
-- **Flask**: Web framework for API endpoints
-- **Flask-CORS**: Cross-origin resource sharing support
-- **NumPy**: Numerical computing for coordinates and calculations
-- **noise**: Perlin noise generation for map terrain
-- **pytest**: Testing framework (development)
-
-## API Usage
-
-### Quick Start Example
-```bash
-# Create a new game
-curl -X POST http://localhost:5000/api/game/new \
-  -H "Content-Type: application/json" \
-  -d '{"seed": 42}'
-
-# Get game state (replace {game_id} with returned ID)
-curl http://localhost:5000/api/game/{game_id}/state
-
-# Submit orders for player 1
-curl -X POST http://localhost:5000/api/game/{game_id}/action \
-  -H "Content-Type: application/json" \
-  -d '{
-    "player_id": "p1",
-    "orders": [
-      {
-        "force_id": "p1_f1",
-        "order": "Advance", 
-        "target_hex": {"q": 1, "r": 0},
-        "stance": "Mountain"
-      }
-    ]
-  }'
-```
-
-### Available Endpoints
-- `POST /api/game/new` - Create new game
-- `GET /api/game/{id}/state` - Get current game state
-- `POST /api/game/{id}/action` - Submit player orders
-- `POST /api/game/{id}/upkeep` - Perform upkeep phase
-- `GET /api/game/{id}/log` - Get complete game log
-
-See `docs/api_endpoints.md` for complete API documentation.
+1. **Sovereign Capture** — destroy the enemy's power-1 force
+2. **Domination** — hold 2+ Contentious hexes for 4 consecutive turns
+3. **Elimination** — destroy all enemy forces
 
 ## Project Structure
 
 ```
 SunTzu/
-├── app.py                 # Main Flask application and API endpoints
-├── models.py              # Game entity data classes (Player, Force, Hex)
-├── state.py              # Game state management and initialization
-├── orders.py             # Order processing and validation
-├── resolution.py         # Confrontation mechanics and combat resolution
-├── upkeep.py             # Turn finalization and victory conditions
-├── map_gen.py            # Procedural map generation with balance validation
-├── config.json           # Game parameter configuration
-├── requirements.txt      # Python dependencies
-├── docs/
-│   ├── api_endpoints.md  # Complete API documentation
-│   ├── architecture.md   # System architecture overview
-│   └── gdd_reference.md  # Game mechanics reference
-├── tests/                # Comprehensive test suite
-│   ├── test_api.py       # API integration tests  
-│   ├── test_orders.py    # Order processing unit tests
-│   ├── test_resolution.py # Combat mechanics tests
-│   ├── test_upkeep.py    # Turn finalization tests
-│   ├── test_state.py     # Game state management tests
-│   └── test_map_gen.py   # Map generation tests
-└── venv/                 # Virtual environment (created during setup)
+├── app.py                 # Flask REST API
+├── models.py              # Force, Player, Hex data classes
+├── state.py               # Game state management, fog of war
+├── orders.py              # Order processing, noisy scouting
+├── resolution.py          # Combat resolution with variance
+├── upkeep.py              # Turn finalization, Noose, victory conditions
+├── map_gen.py             # 7x7 hex grid generation
+├── config.json            # Tunable game parameters
+├── play_cli.py            # CLI play mode
+├── benchmark/             # Benchmark instrumentation (v10)
+│   ├── __init__.py
+│   ├── telemetry.py       # AgentReport, EventLog, BeliefState schemas
+│   ├── metrics.py         # Brier score, log loss, calibration, ToM delta
+│   └── llm_agent_interface.py  # LLM agent skeleton + MockLLMAgent
+├── tests/
+│   ├── simulate.py        # Game simulation + 9 Tier 1 strategies
+│   ├── strategies_advanced.py  # Tiers 2-4 strategies
+│   ├── test_gameplay.py   # 56 gameplay tests (multi-tier pool)
+│   ├── test_benchmark.py  # 30 benchmark property tests
+│   ├── test_fun_score.py  # Fun Score harness (9 dimensions)
+│   ├── test_narrative_score.py  # Narrative Score harness (10 dimensions)
+│   ├── test_depth_score.py     # Depth Score harness (6 dimensions)
+│   └── test_*.py          # Unit tests for each core module
+└── docs/
+    ├── v10-plan.md         # v10 design document
+    ├── v10-balance-diagnosis.md  # Metagame analysis
+    └── repo-analysis.md    # Full repository analysis
 ```
 
-## Development
+## How to Run
 
-### Running Tests
 ```bash
-# Run all tests
+# Unit tests (~2s)
+pytest tests/test_models.py tests/test_state.py tests/test_orders.py \
+       tests/test_resolution.py tests/test_upkeep.py tests/test_map_gen.py
+
+# Benchmark tests (~30s)
+pytest tests/test_benchmark.py
+
+# Gameplay tests (~3min)
+pytest tests/test_gameplay.py
+
+# All tests
 pytest
 
-# Run specific test file
-pytest tests/test_api.py
+# API server
+python app.py
 
-# Run with verbose output
-pytest -v
-
-# Run with coverage report
-pytest --cov=. --cov-report=html
+# CLI play mode
+python play_cli.py
 ```
 
-### Game Configuration
-Edit `config.json` to modify game parameters:
+## Strategy Tiers
+
+| Tier | Strategy | Approach |
+|------|----------|----------|
+| 1 | Aggressive | Charge-first sovereign rush (v10) |
+| 1 | Cautious | Scout first, attack with intel advantage |
+| 1 | Ambush | Set traps, fortify, wait for attackers |
+| 1 | Blitzer | Charge-first blitz (v10) |
+| 1 | Sovereign Hunter | Prioritize finding and killing the Sovereign |
+| 1 | Coordinator | Maintain formation for support bonuses |
+| 1 | Noose Dodger | Stay ahead of the shrinking board |
+| 2 | Pattern Reader | Track enemy movement patterns |
+| 2 | Supply Cutter | Break enemy supply chains |
+| 3 | Bayesian Hunter | Bayesian inference over hidden powers |
+| 4 | Lookahead | Forward simulation across belief states |
+
+## Configuration (v10)
+
 ```json
 {
-  "starting_chi": 100,
-  "starting_shih": 10,
-  "max_shih": 20,
-  "force_count": 3,
-  "base_chi_loss": 8,
-  "tendency_modifier": 1
+  "charge_attack_bonus": 2,
+  "ambush_bonus": 2,
+  "sovereign_defense_bonus": 0,
+  "domination_turns_required": 4,
+  "scout_accuracy": 0.7,
+  "retreat_threshold": 2,
+  "shrink_interval": 5
 }
 ```
 
-### Code Style
-- Follow PEP 8 Python style guidelines
-- Use type hints for function parameters and returns
-- Include docstrings for all public functions and classes
-- Maintain comprehensive test coverage
+## Version History
 
-## Game Mechanics Summary
-
-### Turn Structure
-1. **Plan Phase**: Both players submit orders simultaneously
-2. **Execute Phase**: Orders resolved, confrontations occur automatically  
-3. **Upkeep Phase**: Resources updated, victory conditions checked, next turn begins
-
-### Order Types
-- **Advance** (2 Shih): Move to adjacent hex, choose combat stance, confrontation if occupied
-- **Meditate** (0 Shih): Stay in place, gain +2 Shih next turn, reveal adjacent enemy orders
-- **Deceive** (3 Shih): Create ghost in adjacent hex to waste enemy moves
-
-### Strategic Elements
-- **Terrain Control**: Contentious hexes provide +2 Shih per turn when controlled
-- **Tendency Tracking**: Predictable patterns (3 same orders) weaken combat effectiveness
-- **Encirclement**: Surrounding enemy forces for 2+ turns inflicts major Chi penalties
-- **Information Warfare**: Meditation reveals enemy intentions for tactical advantage
-
-## Deployment
-
-### Development Server
-The Flask development server is suitable for testing and development:
-```bash
-python app.py  # Runs on http://localhost:5000
-```
-
-### Production Deployment
-Designed for Google Cloud Platform App Engine:
-- Stateless API design for horizontal scaling
-- JSON-based state management
-- Comprehensive logging for monitoring
-- Database-ready architecture for persistent storage
-
-## Research Applications
-
-This implementation serves as a platform for AI research in:
-- **Strategic Planning**: Multi-turn decision making under uncertainty
-- **Deception Analysis**: Information asymmetry and misdirection tactics  
-- **Resource Management**: Balancing immediate and long-term resource allocation
-- **Psychological Modeling**: Tendency tracking and behavioral prediction
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make changes with appropriate tests
-4. Ensure all tests pass (`pytest`)
-5. Commit changes (`git commit -m 'Add amazing feature'`)
-6. Push to branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
-
-## License
-
-MIT License - see LICENSE file for details. Open-source development philosophy aligned with game design principles.
-
-## Acknowledgments
-
-- Built with guidance from various AI assistants
-- Inspired by Sun Tzu's *The Art of War* strategic principles
-- Game design focused on psychological depth and strategic complexity
-- Testing methodology ensures robust, reliable gameplay mechanics
-
----
-
-**Status**: Fully implemented and tested. Ready for gameplay, AI research, and frontend integration.
+| Version | Key Changes |
+|---------|-------------|
+| v10 | Strategic reasoning benchmark. Noisy scouting, telemetry, multi-tier pool. |
+| v9 | Sovereign defense bonus, wider starting separation, CLI play mode. |
+| v8 | Anti-Goodhart overhaul: ablation tests, adversarial strategies. |
+| v7 | Supply hop limits, tighter economy, intransitive metagame. |
+| v6 | Rigorous gameplay tests with game balance fixes. |
+| v5 | Supply lines, charge bonus, wider combat variance, gentler Noose. |
+| v4 | Charge, support, retreat mechanics. |
+| v3 | Complete redesign: hidden power values, fog of war, shrinking board. |

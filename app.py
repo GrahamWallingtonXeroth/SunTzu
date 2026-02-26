@@ -1,9 +1,15 @@
 """
-API for The Unfought Battle.
+API for The Unfought Battle v9.
 
 Every endpoint respects the fog of war. You never see more than your
 player is supposed to know. The state endpoint requires a player_id
 because there is no god-view in this game.
+
+v3 changes:
+- Deploy assigns power values (1-5), not roles
+- Fog of war: enemy forces outside visibility range are hidden
+- Ambush replaces Feint
+- Shrinking board shown in state
 """
 
 from flask import Flask, request, jsonify
@@ -46,21 +52,21 @@ def new_game():
 @app.route('/api/game/<game_id>/deploy', methods=['POST'])
 def deploy_forces(game_id: str):
     """
-    Assign roles to your forces.
+    Assign power values to your forces.
 
     POST body:
     {
         "player_id": "p1",
         "assignments": {
-            "p1_f1": "Sovereign",
-            "p1_f2": "Vanguard",
-            "p1_f3": "Vanguard",
-            "p1_f4": "Scout",
-            "p1_f5": "Shield"
+            "p1_f1": 1,
+            "p1_f2": 2,
+            "p1_f3": 3,
+            "p1_f4": 4,
+            "p1_f5": 5
         }
     }
 
-    Must assign exactly: 1 Sovereign, 2 Vanguard, 1 Scout, 1 Shield.
+    Must assign each value 1-5 exactly once. Power 1 = Sovereign (lose it, lose the game).
     Both players must deploy before the game begins.
     """
     try:
@@ -83,7 +89,13 @@ def deploy_forces(game_id: str):
         if not assignments or not isinstance(assignments, dict):
             return jsonify({'error': 'assignments dict is required'}), 400
 
-        error = apply_deployment(game_state, player_id, assignments)
+        # Convert values to int
+        try:
+            int_assignments = {k: int(v) for k, v in assignments.items()}
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Power values must be integers'}), 400
+
+        error = apply_deployment(game_state, player_id, int_assignments)
         if error:
             return jsonify({'error': error}), 400
 
@@ -103,8 +115,8 @@ def get_game_state(game_id: str):
     Get game state from YOUR perspective.
 
     Requires ?player_id=p1 or ?player_id=p2.
-    You see your own forces in full. Enemy forces show position only,
-    plus any roles you've discovered through scouting or combat.
+    You see your own forces in full. Enemy forces show position only
+    (within visibility range), plus any powers you've discovered.
     """
     try:
         if game_id not in games:
@@ -138,7 +150,7 @@ def submit_action(game_id: str):
             {"force_id": "p1_f1", "order": "Move", "target_hex": {"q": 1, "r": 0}},
             {"force_id": "p1_f2", "order": "Scout", "scout_target_id": "p2_f3"},
             {"force_id": "p1_f3", "order": "Fortify"},
-            {"force_id": "p1_f4", "order": "Feint", "target_hex": {"q": 3, "r": 3}},
+            {"force_id": "p1_f4", "order": "Ambush"},
             {"force_id": "p1_f5", "order": "Move", "target_hex": {"q": 0, "r": 2}}
         ]
     }
@@ -244,7 +256,6 @@ def submit_action(game_id: str):
         view['resolve_result'] = {
             'combats': resolve_result.get('combats', []),
             'movements': resolve_result.get('movements', []),
-            'feints': resolve_result.get('feints', []),
             # Only include scouts for this player
             'scouts': [
                 s for s in resolve_result.get('scouts', [])
@@ -257,6 +268,7 @@ def submit_action(game_id: str):
             'winner': upkeep_result.get('winner'),
             'victory_type': upkeep_result.get('victory_type'),
             'domination_progress': upkeep_result.get('domination_progress', {}),
+            'noose_events': upkeep_result.get('noose_events', []),
         }
 
         return jsonify(view)
