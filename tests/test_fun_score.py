@@ -619,23 +619,26 @@ def score_supply_relevance(records: List[GameRecord]) -> Tuple[float, str]:
     else:
         freq_score = 10.0 - (cut_rate - 0.20) / 0.30 * 5.0
 
-    # Sub-score B: Supply loss correlates with losing
+    # Sub-score B: Supply loss correlates with losing (v8: uses per-player data)
     games_with_cuts = [r for r in records if r.supply_cut_forces > 0]
     if games_with_cuts:
-        # Check: do winners have fewer supply cuts than losers?
-        winner_cuts = 0
-        loser_cuts = 0
+        # Now using real per-player supply data instead of a proxy
+        correlated = 0
         counted = 0
         for r in games_with_cuts:
-            if r.winner and r.supply_cut_forces > 0:
-                # Approximate: in games with supply issues, did the loser suffer more?
-                # We don't track per-player supply, so use a proxy: games with more
-                # supply issues tend to be longer (indecisive), which correlates with draws
+            if r.winner and r.winner in ('p1', 'p2'):
+                loser = 'p1' if r.winner == 'p2' else 'p2'
+                loser_cuts = r.supply_cut_p1 if loser == 'p1' else r.supply_cut_p2
+                winner_cuts = r.supply_cut_p1 if r.winner == 'p1' else r.supply_cut_p2
                 counted += 1
-        # Simple proxy: more supply cuts = bad signal
-        avg_cuts_per_ft = sum(r.supply_cut_forces / max(r.total_force_turns, 1)
-                              for r in games_with_cuts) / len(games_with_cuts)
-        impact_score = min(avg_cuts_per_ft / 0.10 * 10.0, 10.0)
+                if loser_cuts > winner_cuts:
+                    correlated += 1
+        if counted > 0:
+            correlation_rate = correlated / counted
+            # Target: >50% means supply cuts genuinely predict losing
+            impact_score = min(correlation_rate / 0.60 * 10.0, 10.0)
+        else:
+            impact_score = 5.0  # Neutral if no decided games with cuts
     else:
         impact_score = 0.0
 
@@ -700,6 +703,30 @@ def test_fun_score():
     scores, overall = compute_fun_scores(verbose=True)
     # Store for reference but don't assert — this is a measurement, not a gate
     assert overall >= 0, "Fun score computation failed"
+
+
+def test_fun_score_minimum_dimensions():
+    """Every fun dimension must score at least 3.0/10.
+    Why: Below 3.0 means a mechanic is clearly broken. This is the safety net
+    that gives the fun score real teeth without over-constraining the overall score.
+    Addresses Goodhart problem #7: fun score with no enforcement."""
+    scores, _ = compute_fun_scores(verbose=False)
+    for name, score in scores.items():
+        assert score >= 3.0, (
+            f"Fun dimension '{name}' scored {score:.1f}/10 — below minimum of 3.0. "
+            f"This mechanic needs attention."
+        )
+
+
+def test_fun_score_overall_minimum():
+    """Overall fun score must be at least 5.0/10.
+    Why: An overall score below 5 means the game is failing at more dimensions
+    than it's succeeding at. Addresses Goodhart problem #7."""
+    _, overall = compute_fun_scores(verbose=False)
+    assert overall >= 5.0, (
+        f"Overall fun score is {overall:.1f}/10 — below minimum of 5.0. "
+        f"Multiple dimensions need improvement."
+    )
 
 
 if __name__ == "__main__":

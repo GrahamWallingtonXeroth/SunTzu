@@ -1,8 +1,10 @@
 """
-Combat resolution for The Unfought Battle v7.
+Combat resolution for The Unfought Battle v8.
 
 Combat is decisive but not always lethal. Both power values are revealed
 permanently — even winning costs you the secrecy that was protecting you.
+
+v8: Anti-Goodhart measurement overhaul. No game rule changes.
 
 v7 changes:
 - Charge attack bonus reduced to +1 (was +2 in v6). Creates intransitive

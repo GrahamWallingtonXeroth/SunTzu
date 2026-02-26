@@ -1,15 +1,16 @@
 """
-Simulation harness for The Unfought Battle v7.
+Simulation harness for The Unfought Battle v8.
 
 Provides AI strategy players and a game runner that can play thousands of
 games to measure emergent properties. The strategies range from brain-dead
 (random) to competent (heuristic), allowing us to test whether the game
 rewards skill, creates diverse outcomes, and avoids degenerate states.
 
-v7: Power-aware strategies with emergent roles. Supply chain hops limit
-supply reach. Charge attack bonus rebalanced for intransitive metagame.
-9 strategies: random, aggressive, cautious, ambush, turtle, dodger,
-coordinator, hunter, blitzer.
+v8: Anti-Goodhart overhaul. Added 5 adversarial/ablation strategies to
+stress-test the measurement layer: SmartPassive (intelligent passivity),
+NeverScoutVariant (scouting ablation), NoChargeVariant (charge ablation),
+PowerBlind (emergence test), DominationStaller (degenerate exploit).
+Per-player supply tracking. 14 strategies total.
 
 This module is the engine. The tests are in test_gameplay.py.
 """
@@ -57,7 +58,9 @@ class GameRecord:
     first_combat_turn: int = -1
     combat_details: List[Dict] = field(default_factory=list)
     sovereign_revealed_turn: Dict[str, int] = field(default_factory=dict)
-    supply_cut_forces: int = 0  # force-turns where supply was cut
+    supply_cut_forces: int = 0  # force-turns where supply was cut (aggregate)
+    supply_cut_p1: int = 0     # force-turns where p1 supply was cut
+    supply_cut_p2: int = 0     # force-turns where p2 supply was cut
     total_force_turns: int = 0  # total force-turns (for normalization)
     unique_positions: int = 0  # unique hexes occupied across game
     per_power_orders: Dict[int, Dict[str, int]] = field(default_factory=dict)
@@ -972,6 +975,257 @@ class BlitzerStrategy(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Adversarial / ablation strategies (v8)
+# ---------------------------------------------------------------------------
+
+class SmartPassiveStrategy(Strategy):
+    """
+    Intelligent passivity: moves toward center to dodge Noose, fortifies at
+    contentious hexes, but NEVER initiates combat. Retreats from all enemies.
+    If the game is well-designed, this should lose to every active strategy.
+    Unlike Turtle (which never moves), this tests whether the game punishes
+    passivity even when the passive player adapts to the board.
+    """
+    name = "smart_passive"
+
+    def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
+        ids = [f.id for f in player.forces]
+        powers = [3, 4, 1, 5, 2]  # Sovereign in middle
+        return dict(zip(ids, powers))
+
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+        player = game_state.get_player_by_id(player_id)
+        orders = []
+        contentious = _contentious_hexes(game_state)
+        center = (3, 3)
+
+        for force in player.get_alive_forces():
+            enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
+            enemies_adjacent = [e for e in enemies_near
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
+            on_contentious = any(force.position == c for c in contentious)
+
+            # ALWAYS retreat from adjacent enemies — never fight
+            if enemies_adjacent:
+                nearest = min(enemies_adjacent, key=lambda e: hex_distance(
+                    force.position[0], force.position[1], e.position[0], e.position[1]))
+                moves = _valid_moves(force, game_state)
+                if moves:
+                    # Retreat away from enemy, prefer toward center
+                    best = max(moves, key=lambda m: (
+                        hex_distance(m[0], m[1], nearest.position[0], nearest.position[1])
+                        - hex_distance(m[0], m[1], center[0], center[1]) * 0.3
+                    ))
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                    continue
+                # Cornered — fortify as last resort
+                if _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                continue
+
+            # On contentious hex with no adjacent enemies: fortify to hold
+            if on_contentious:
+                if _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                    continue
+
+            # Move toward contentious hexes or center (dodge the Noose)
+            target = min(contentious, key=lambda c: hex_distance(
+                force.position[0], force.position[1], c[0], c[1])) if contentious else center
+            best = _move_toward(force, target, game_state)
+            if best:
+                orders.append(Order(OrderType.MOVE, force, target_hex=best))
+            elif _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+
+        return orders
+
+
+class NeverScoutVariant(CautiousStrategy):
+    """
+    Ablation test: identical to CautiousStrategy but NEVER scouts.
+    If this performs equally to Cautious, scouting is decorative.
+    """
+    name = "never_scout"
+
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+        orders = super().plan(player_id, game_state, rng)
+        # Strip all scout orders; replace with fortify or move toward center
+        player = game_state.get_player_by_id(player_id)
+        center = (3, 3)
+        filtered = []
+        for o in orders:
+            if o.order_type == OrderType.SCOUT:
+                # Replace with move toward center
+                best = _move_toward(o.force, center, game_state)
+                if best:
+                    filtered.append(Order(OrderType.MOVE, o.force, target_hex=best))
+                elif _can_order(o.force, player, OrderType.FORTIFY):
+                    filtered.append(Order(OrderType.FORTIFY, o.force))
+            else:
+                filtered.append(o)
+        return filtered
+
+
+class NoChargeVariant(BlitzerStrategy):
+    """
+    Ablation test: identical to BlitzerStrategy but NEVER charges.
+    Replaces all Charge orders with Move toward the same target.
+    If this performs equally to Blitzer, charge is decorative.
+    """
+    name = "no_charge"
+
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+        orders = super().plan(player_id, game_state, rng)
+        filtered = []
+        for o in orders:
+            if o.order_type == OrderType.CHARGE:
+                # Replace with move toward the charge target
+                best = _move_toward(o.force, o.target_hex, game_state)
+                if best:
+                    filtered.append(Order(OrderType.MOVE, o.force, target_hex=best))
+            else:
+                filtered.append(o)
+        return filtered
+
+
+class PowerBlindStrategy(Strategy):
+    """
+    Makes ALL decisions WITHOUT checking force.power. Moves toward center /
+    contentious, fortifies when enemies near, scouts enemies, attacks adjacent
+    enemies — but treats all forces identically regardless of power.
+    Tests genuine role emergence: if power levels produce differentiated
+    outcomes under this strategy, that's real emergence, not programmed behavior.
+    """
+    name = "power_blind"
+
+    def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
+        # Random deployment — no power-aware positioning
+        powers = [1, 2, 3, 4, 5]
+        rng.shuffle(powers)
+        return {f.id: p for f, p in zip(player.forces, powers)}
+
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+        player = game_state.get_player_by_id(player_id)
+        orders = []
+        contentious = _contentious_hexes(game_state)
+        center = (3, 3)
+
+        for force in player.get_alive_forces():
+            enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
+            enemies_adjacent = [e for e in enemies_near
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
+            on_contentious = any(force.position == c for c in contentious)
+
+            # Adjacent enemy: attack (no power check!)
+            if enemies_adjacent:
+                target = enemies_adjacent[0]
+                orders.append(Order(OrderType.MOVE, force, target_hex=target.position))
+                continue
+
+            # Enemies at range 2: scout one if unscouted
+            if enemies_near:
+                unscouted = [e for e in enemies_near if e.id not in player.known_enemy_powers]
+                if unscouted and _can_order(force, player, OrderType.SCOUT):
+                    orders.append(Order(OrderType.SCOUT, force, scout_target_id=unscouted[0].id))
+                    continue
+
+            # On contentious: fortify
+            if on_contentious and _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+                continue
+
+            # Move toward contentious / center
+            target = min(contentious, key=lambda c: hex_distance(
+                force.position[0], force.position[1], c[0], c[1])) if contentious else center
+            best = _move_toward(force, target, game_state)
+            if best:
+                orders.append(Order(OrderType.MOVE, force, target_hex=best))
+            elif _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+
+        return orders
+
+
+class DominationStallerStrategy(Strategy):
+    """
+    Degenerate exploit test: rush strong forces to 2 contentious hexes,
+    then fortify/ambush and refuse all other combat. Sovereign stays far back.
+    Tests whether stalling for domination victory is an exploitable path.
+    """
+    name = "dom_staller"
+
+    def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
+        ids = [f.id for f in player.forces]
+        # Sovereign in back (slot 4), strong forces in front for hex control
+        powers = [5, 4, 3, 2, 1]
+        return dict(zip(ids, powers))
+
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+        player = game_state.get_player_by_id(player_id)
+        orders = []
+        contentious = _contentious_hexes(game_state)
+        center = (3, 3)
+
+        # Sort contentious hexes by distance to our sovereign for priority
+        sov = None
+        for f in player.get_alive_forces():
+            if f.is_sovereign:
+                sov = f
+                break
+
+        for force in player.get_alive_forces():
+            enemies_adjacent = [e for e in _visible_enemies(force, player_id, game_state, max_range=1)
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
+            on_contentious = any(force.position == c for c in contentious)
+
+            # Sovereign: flee to center, never fight
+            if force.is_sovereign:
+                if enemies_adjacent:
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        nearest = enemies_adjacent[0]
+                        best = max(moves, key=lambda m: hex_distance(
+                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                        continue
+                best = _move_toward(force, center, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                elif _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                continue
+
+            # On contentious: HOLD IT — fortify/ambush, never leave
+            if on_contentious:
+                if enemies_adjacent and _can_order(force, player, OrderType.AMBUSH):
+                    orders.append(Order(OrderType.AMBUSH, force))
+                elif _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                continue
+
+            # Not on contentious: rush to nearest uncontrolled contentious hex
+            uncontrolled = [c for c in contentious if game_state.get_force_at_position(c) is None
+                           or game_state.get_force_owner(game_state.get_force_at_position(c).id).id != player_id]
+            if uncontrolled:
+                target = min(uncontrolled, key=lambda c: hex_distance(
+                    force.position[0], force.position[1], c[0], c[1]))
+            else:
+                # All contentious held by us — move toward center
+                target = center
+            best = _move_toward(force, target, game_state)
+            if best:
+                orders.append(Order(OrderType.MOVE, force, target_hex=best))
+            elif _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+
+        return orders
+
+
+# ---------------------------------------------------------------------------
 # All strategies
 # ---------------------------------------------------------------------------
 
@@ -987,7 +1241,17 @@ ALL_STRATEGIES = [
     BlitzerStrategy(),
 ]
 
-STRATEGY_MAP = {s.name: s for s in ALL_STRATEGIES}
+ADVERSARIAL_STRATEGIES = [
+    SmartPassiveStrategy(),
+    NeverScoutVariant(),
+    NoChargeVariant(),
+    PowerBlindStrategy(),
+    DominationStallerStrategy(),
+]
+
+EXTENDED_STRATEGIES = ALL_STRATEGIES + ADVERSARIAL_STRATEGIES
+
+STRATEGY_MAP = {s.name: s for s in EXTENDED_STRATEGIES}
 
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +1306,10 @@ def run_game(
                 if not has_supply(f, p.forces, supply_cfg['supply_range'],
                                   max_hops=supply_cfg['max_supply_hops']):
                     record.supply_cut_forces += 1
+                    if pid == 'p1':
+                        record.supply_cut_p1 += 1
+                    else:
+                        record.supply_cut_p2 += 1
 
         p1_orders = p1_strategy.plan('p1', game, rng)
         p2_orders = p2_strategy.plan('p2', game, rng)

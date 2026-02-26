@@ -1,4 +1,4 @@
-"""Tests for v7 combat resolution: power values + variance + ambush + charge + support + retreat."""
+"""Tests for v8 combat resolution: power values + variance + ambush + charge + support + retreat."""
 
 import pytest
 import random

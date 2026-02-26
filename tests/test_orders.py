@@ -1,4 +1,4 @@
-"""Tests for v7 order processing: Move, Scout, Fortify, Ambush, Charge + supply lines + chain hops."""
+"""Tests for v8 order processing: Move, Scout, Fortify, Ambush, Charge + supply lines + chain hops."""
 
 import pytest
 from state import initialize_game, apply_deployment, GameState

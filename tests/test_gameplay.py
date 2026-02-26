@@ -1,5 +1,5 @@
 """
-Gameplay tests for The Unfought Battle v7.
+Gameplay tests for The Unfought Battle v8.
 
 These tests define what a GOOD game looks like, then check whether this game
 meets that standard. Thresholds are set based on design goals, not current
@@ -28,6 +28,14 @@ WHAT A GOOD GAME EXHIBITS
 10. ECONOMY CONSTRAINS    — Real tradeoffs, not unlimited fortify
 11. THE NOOSE PRESSURES   — Timer shapes play without dominating it
 12. METAGAME HAS DEPTH    — Game theory properties hold among COMPETITIVE strats
+
+v8 ANTI-GOODHART ADDITIONS
+===========================
+13. ABLATION TESTS        — Remove a mechanic, verify performance degrades
+14. ANTI-PASSIVITY        — SmartPassive (not just straw-man Turtle) must lose
+15. DEGENERATE EXPLOITS   — DominationStaller and other exploits must fail
+16. SEED ROBUSTNESS       — Results stable across different map seed sets
+17. DEPLOYMENT BREADTH    — Deployment matters for ALL strategies, not just one
 """
 
 import pytest
@@ -44,7 +52,9 @@ from tests.simulate import (
     RandomStrategy, AggressiveStrategy, CautiousStrategy,
     AmbushStrategy, TurtleStrategy, SovereignHunterStrategy,
     NooseDodgerStrategy, CoordinatorStrategy, BlitzerStrategy,
-    ALL_STRATEGIES, STRATEGY_MAP,
+    SmartPassiveStrategy, NeverScoutVariant, NoChargeVariant,
+    PowerBlindStrategy, DominationStallerStrategy,
+    ALL_STRATEGIES, ADVERSARIAL_STRATEGIES, EXTENDED_STRATEGIES, STRATEGY_MAP,
 )
 
 
@@ -354,29 +364,29 @@ class TestNoDominantStrategy:
             )
 
     def test_no_strategy_dominates_competitive_field(self, competitive_records):
-        """No competitive strategy should have >65% overall win rate in competitive games.
-        Why: >65% means one approach is clearly best regardless of opponent."""
+        """No competitive strategy should have >62% overall win rate in competitive games.
+        Why: >62% means one approach is clearly best regardless of opponent."""
         for name in COMPETITIVE_NAMES:
             rate = _strategy_win_rate(competitive_records, name)
-            assert rate < 0.65, (
+            assert rate < 0.62, (
                 f"'{name}' wins {rate:.1%} of competitive games — dominates the field"
             )
 
     def test_multiple_competitive_strategies_viable(self, competitive_records):
-        """At least 4 competitive strategies should have >35% win rate.
-        Why: Fewer than 4 viable options is too narrow a metagame."""
+        """At least 5 competitive strategies should have >38% win rate.
+        Why: Fewer than 5 viable options is too narrow a metagame."""
         viable = sum(1 for name in COMPETITIVE_NAMES
-                     if _strategy_win_rate(competitive_records, name) > 0.35)
-        assert viable >= 4, (
-            f"Only {viable} competitive strategies above 35% — metagame too narrow"
+                     if _strategy_win_rate(competitive_records, name) > 0.38)
+        assert viable >= 5, (
+            f"Only {viable} competitive strategies above 38% — metagame too narrow"
         )
 
     def test_tier_gap_is_small(self, competitive_records):
-        """Gap between best and worst competitive strategy should be <35%.
+        """Gap between best and worst competitive strategy should be <30%.
         Why: A large gap means the 'competitive' pool has its own hierarchy."""
         rates = [_strategy_win_rate(competitive_records, name) for name in COMPETITIVE_NAMES]
         gap = max(rates) - min(rates)
-        assert gap < 0.35, (
+        assert gap < 0.30, (
             f"Competitive tier gap is {gap:.1%} — too hierarchical, not rock-paper-scissors. "
             f"Rates: {sorted(zip(COMPETITIVE_NAMES, rates), key=lambda x: -x[1])}"
         )
@@ -507,8 +517,8 @@ class TestForcesDie:
         if total_combats == 0:
             pytest.skip("No combats")
         rate = total_retreats / total_combats
-        assert 0.20 < rate < 0.60, (
-            f"Retreat rate is {rate:.1%} — should be 20-60% for meaningful combat"
+        assert 0.25 < rate < 0.55, (
+            f"Retreat rate is {rate:.1%} — should be 25-55% for meaningful combat"
         )
 
     def test_elimination_occurs(self, competitive_records):
@@ -792,3 +802,231 @@ class TestGameTheory:
                 f"'{names[i]}' beats all {beaten}/{n-1} competitive opponents — "
                 f"strictly dominant"
             )
+
+
+# ===========================================================================
+# 13. ABLATION TESTS — Remove a mechanic, verify performance degrades (v8)
+# ===========================================================================
+
+ABLATION_GAMES = 80
+ABLATION_SEEDS = list(range(ABLATION_GAMES))
+
+
+def _head_to_head_win_rate(s1, s2, n_games=ABLATION_GAMES, seeds=None):
+    """Run s1 vs s2 head-to-head, alternating sides. Return s1 win rate."""
+    if seeds is None:
+        seeds = list(range(n_games))
+    wins = 0
+    total = 0
+    for i, seed in enumerate(seeds[:n_games // 2]):
+        r = run_game(s1, s2, seed=seed, rng_seed=i * 1000)
+        total += 1
+        if r.winner == 'p1':
+            wins += 1
+        r = run_game(s2, s1, seed=seed, rng_seed=i * 1000 + 500)
+        total += 1
+        if r.winner == 'p2':
+            wins += 1
+    return wins / total if total > 0 else 0.5
+
+
+class TestAblation:
+    """Ablation tests: remove one mechanic, verify performance degrades.
+    This addresses Goodhart problem #5: correlation tests are confounded.
+    Ablation tests prove CAUSATION — the mechanic itself matters."""
+
+    def test_scouting_matters(self):
+        """CautiousStrategy should beat its NeverScout ablation.
+        Why: If removing scouting doesn't hurt, scouting is decorative."""
+        rate = _head_to_head_win_rate(CautiousStrategy(), NeverScoutVariant())
+        assert rate > 0.55, (
+            f"Cautious only wins {rate:.1%} vs NeverScout — "
+            f"scouting doesn't provide a real advantage"
+        )
+
+    def test_charge_matters(self):
+        """BlitzerStrategy should beat its NoCharge ablation.
+        Why: If removing charge doesn't hurt, charge is decorative."""
+        rate = _head_to_head_win_rate(BlitzerStrategy(), NoChargeVariant())
+        assert rate > 0.55, (
+            f"Blitzer only wins {rate:.1%} vs NoCharge — "
+            f"charge doesn't provide a real advantage"
+        )
+
+    def test_power_awareness_matters(self):
+        """Competitive strategies should beat PowerBlind head-to-head.
+        Why: If ignoring power values doesn't hurt, power-awareness is theater."""
+        blind = PowerBlindStrategy()
+        wins_vs_competitive = 0
+        for strat in COMPETITIVE_STRATEGIES:
+            rate = _head_to_head_win_rate(strat, blind, n_games=40,
+                                          seeds=list(range(40)))
+            if rate > 0.50:
+                wins_vs_competitive += 1
+        # At least 5 of 7 competitive strategies should beat power-blind
+        assert wins_vs_competitive >= 5, (
+            f"Only {wins_vs_competitive}/7 competitive strategies beat PowerBlind — "
+            f"power-awareness doesn't matter enough"
+        )
+
+
+# ===========================================================================
+# 14. ANTI-PASSIVITY — SmartPassive must lose, not just straw-man Turtle (v8)
+# ===========================================================================
+
+class TestAntiPassivity:
+    """SmartPassive is an intelligent passive strategy that dodges the Noose
+    and fortifies at contentious hexes but never fights. If the game is
+    well-designed, this should lose to every active strategy — not just
+    brain-dead Turtle. Addresses Goodhart problem #3."""
+
+    def test_smart_passive_loses_to_each_competitive(self):
+        """SmartPassive should win < 40% against each competitive strategy.
+        Why: If intelligent passivity is viable, the game rewards non-engagement."""
+        sp = SmartPassiveStrategy()
+        for strat in COMPETITIVE_STRATEGIES:
+            rate = _head_to_head_win_rate(sp, strat, n_games=40,
+                                          seeds=list(range(40)))
+            assert rate < 0.40, (
+                f"SmartPassive wins {rate:.1%} vs {strat.name} — "
+                f"intelligent passivity is viable"
+            )
+
+    def test_smart_passive_overall_loses(self):
+        """SmartPassive overall win rate against competitive strategies should be < 35%.
+        Why: An intelligent passive strategy should not be competitive."""
+        sp = SmartPassiveStrategy()
+        total_games = 0
+        total_wins = 0
+        for strat in COMPETITIVE_STRATEGIES:
+            for seed in range(20):
+                r1 = run_game(sp, strat, seed=seed, rng_seed=seed * 1000)
+                total_games += 1
+                if r1.winner == 'p1':
+                    total_wins += 1
+                r2 = run_game(strat, sp, seed=seed, rng_seed=seed * 1000 + 500)
+                total_games += 1
+                if r2.winner == 'p2':
+                    total_wins += 1
+        rate = total_wins / total_games
+        assert rate < 0.35, (
+            f"SmartPassive wins {rate:.1%} overall vs competitive — "
+            f"intelligent passivity is too viable"
+        )
+
+
+# ===========================================================================
+# 15. DEGENERATE EXPLOITS — Exploit strategies must fail (v8)
+# ===========================================================================
+
+class TestDegenerateExploits:
+    """Degenerate strategies that try to exploit specific mechanics should
+    lose to competitive strategies. Addresses Goodhart problem #4."""
+
+    def test_domination_staller_not_viable(self):
+        """DominationStaller should win < 40% against competitive strategies.
+        Why: Stalling for domination should not be a viable strategy."""
+        staller = DominationStallerStrategy()
+        total_games = 0
+        total_wins = 0
+        for strat in COMPETITIVE_STRATEGIES:
+            for seed in range(20):
+                r1 = run_game(staller, strat, seed=seed, rng_seed=seed * 1000)
+                total_games += 1
+                if r1.winner == 'p1':
+                    total_wins += 1
+                r2 = run_game(strat, staller, seed=seed, rng_seed=seed * 1000 + 500)
+                total_games += 1
+                if r2.winner == 'p2':
+                    total_wins += 1
+        rate = total_wins / total_games
+        assert rate < 0.40, (
+            f"DominationStaller wins {rate:.1%} of competitive matchups — "
+            f"domination stalling is exploitable"
+        )
+
+    def test_no_adversarial_dominates_competitive(self):
+        """No adversarial strategy should beat >5 of 7 competitive strategies.
+        Why: Adversarial strategies should not dominate the competitive field."""
+        for adv in ADVERSARIAL_STRATEGIES:
+            beats = 0
+            for comp in COMPETITIVE_STRATEGIES:
+                rate = _head_to_head_win_rate(adv, comp, n_games=40,
+                                              seeds=list(range(40)))
+                if rate > 0.50:
+                    beats += 1
+            assert beats <= 5, (
+                f"'{adv.name}' beats {beats}/{len(COMPETITIVE_STRATEGIES)} "
+                f"competitive strategies — adversarial strategy dominates"
+            )
+
+
+# ===========================================================================
+# 16. SEED ROBUSTNESS — Results stable across different map seeds (v8)
+# ===========================================================================
+
+class TestSeedRobustness:
+    """Results should be stable across different map seed sets.
+    Addresses Goodhart problem #9: fixed seeds create hidden overfitting."""
+
+    def test_win_rates_stable_across_seeds(self, competitive_records):
+        """Run tournament with offset seeds, verify win rates within ±15pp."""
+        # Canonical win rates from the main tournament
+        canonical = {name: _strategy_win_rate(competitive_records, name)
+                     for name in COMPETITIVE_NAMES}
+
+        # Run a secondary tournament with different seeds
+        alt_seeds = list(range(100, 100 + GAMES_PER_MATCHUP))
+        alt_records = run_tournament(
+            COMPETITIVE_STRATEGIES,
+            games_per_matchup=GAMES_PER_MATCHUP,
+            map_seeds=alt_seeds,
+        )
+
+        for name in COMPETITIVE_NAMES:
+            alt_rate = _strategy_win_rate(alt_records, name)
+            diff = abs(alt_rate - canonical[name])
+            assert diff < 0.15, (
+                f"'{name}' win rate shifts by {diff:.1%} across seed sets "
+                f"(canonical={canonical[name]:.1%}, alt={alt_rate:.1%}) — "
+                f"results overfitted to fixed seeds"
+            )
+
+
+# ===========================================================================
+# 17. DEPLOYMENT BREADTH — Matters for ALL strategies, not just one (v8)
+# ===========================================================================
+
+class TestDeploymentBreadth:
+    """Deployment should affect outcomes across multiple strategies.
+    Addresses Goodhart problem #10: only testing one strategy."""
+
+    def test_deployment_sensitivity_across_strategies(self):
+        """Deployment should change outcomes for at least 4 of 7 competitive strategies.
+        Why: If deployment only matters for 1 strategy, the deployment phase is narrow."""
+        sensitive_count = 0
+        for comp_strat in COMPETITIVE_STRATEGIES:
+            class ShuffledVariant(comp_strat.__class__):
+                name = f"{comp_strat.name}_shuffled"
+                def __init__(self, rng_seed):
+                    self._rng = random.Random(rng_seed)
+                def deploy(self, player, rng):
+                    powers = [1, 2, 3, 4, 5]
+                    self._rng.shuffle(powers)
+                    return {f.id: p for f, p in zip(player.forces, powers)}
+
+            # Run original vs shuffled-deployment version
+            diff_count = 0
+            for seed in range(20):
+                r1 = run_game(comp_strat, CautiousStrategy(), seed=seed, rng_seed=seed)
+                r2 = run_game(ShuffledVariant(seed), CautiousStrategy(), seed=seed, rng_seed=seed)
+                if r1.winner != r2.winner:
+                    diff_count += 1
+            # If >25% of games differ, deployment matters for this strategy
+            if diff_count / 20 > 0.25:
+                sensitive_count += 1
+
+        assert sensitive_count >= 4, (
+            f"Deployment only matters for {sensitive_count}/7 strategies — "
+            f"deployment phase is too narrow"
+        )

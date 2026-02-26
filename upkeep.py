@@ -1,9 +1,10 @@
 """
-Upkeep for The Unfought Battle v7.
+Upkeep for The Unfought Battle v8.
 
 After orders resolve, the board settles. Resources flow. The game checks
 whether anyone has won — not through combat, but through position.
 
+v8: Anti-Goodhart measurement overhaul. No game rule changes.
 v7: Noose fires every 6 turns. Simultaneous sovereign death handled as draw.
 
 Victory conditions, in order of glory:

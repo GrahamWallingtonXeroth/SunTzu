@@ -1,5 +1,5 @@
 """
-Order processing for The Unfought Battle v7.
+Order processing for The Unfought Battle v8.
 
 Five orders. Movement is free. Special orders require supply lines.
 
@@ -12,6 +12,8 @@ Ambush  — 3 Shih. Stay put. +1 power when defending. Hidden. Requires supply.
 Supply: A force has supply if it can chain back to the Sovereign through
 friendly forces, where each link is within supply_range hexes and the total
 chain depth does not exceed max_supply_hops. Forces without supply can only Move.
+
+v8: Anti-Goodhart measurement overhaul. No game rule changes.
 
 v7 changes:
 - Supply chain hops limited by max_supply_hops (default 2) — supply no longer infinite.
