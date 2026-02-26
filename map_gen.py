@@ -1,9 +1,9 @@
 """
-Map generation for The Unfought Battle v9.
+Map generation for The Unfought Battle v10.
 7x7 hex grid with axial coordinates. Tight enough that every hex matters.
 
-New in v3: center-distance calculation to support the shrinking board (Noose).
-Every 4 turns, the outermost ring of hexes becomes Scorched.
+v10: Strategic reasoning benchmark. Metagame rebalanced with multi-tier pool.
+v9: Wider starting separation.
 """
 
 import random

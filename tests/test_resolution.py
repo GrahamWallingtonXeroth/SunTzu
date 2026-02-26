@@ -50,7 +50,7 @@ class TestEffectivePower:
         f = Force(id='p1_f1', position=(3, 3), power=2, ambushing=True)
         game.players[0].add_force(f)
         power = calculate_effective_power(f, game, is_defender=True, apply_variance=False)
-        assert power == 3  # 2 base + 1 ambush
+        assert power == 4  # 2 base + 2 ambush (v10)
 
     def test_ambush_no_bonus_for_attacker(self):
         game = make_combat_state()
@@ -71,8 +71,8 @@ class TestEffectivePower:
         f = Force(id='p1_f1', position=(3, 4), power=1, fortified=True, ambushing=True)
         game.players[0].add_force(f)
         power = calculate_effective_power(f, game, is_defender=True, hex_pos=(3, 4), apply_variance=False)
-        # 1 base + 2 fortify + 1 ambush + 1 difficult + 1 sovereign defense = 6
-        assert power == 6
+        # 1 base + 2 fortify + 2 ambush + 1 difficult + 1 sovereign defense = 7 (v10)
+        assert power == 7
 
     def test_variance_in_range(self):
         game = make_combat_state()
@@ -85,7 +85,7 @@ class TestEffectivePower:
 
 class TestCombatResolution:
     def test_higher_power_wins(self):
-        """Power 5 vs Sovereign (1+1 defense bonus=2) — attacker should win."""
+        """Power 5 vs Sovereign (1+0 defense bonus=1) — attacker should win (v10: sov defense=0)."""
         game = make_combat_state()
         att = Force(id='p1_f1', position=(3, 3), power=5)
         dfd = Force(id='p2_f1', position=(4, 3), power=1)

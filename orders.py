@@ -1,27 +1,28 @@
 """
-Order processing for The Unfought Battle v9.
+Order processing for The Unfought Battle v10.
 
 Five orders. Movement is free. Special orders require supply lines.
 
 Move    — 0 Shih. Go to an adjacent non-Scorched hex. Always available.
-Charge  — 2 Shih. Move up to 2 hexes. +1 attack if entering combat. Requires supply.
-Scout   — 2 Shih. Stay put. Learn one enemy's power within 2 hexes. Requires supply.
+Charge  — 2 Shih. Move up to 2 hexes. +2 attack if entering combat. Requires supply.
+Scout   — 2 Shih. Stay put. Noisy intel on one enemy within 2 hexes. Requires supply.
 Fortify — 2 Shih. Stay put. +2 combat power this turn. Requires supply.
-Ambush  — 3 Shih. Stay put. +1 power when defending. Hidden. Requires supply.
+Ambush  — 3 Shih. Stay put. +2 power when defending. Hidden. Requires supply.
 
 Supply: A force has supply if it can chain back to the Sovereign through
 friendly forces, where each link is within supply_range hexes and the total
 chain depth does not exceed max_supply_hops. Forces without supply can only Move.
 
+v10: Strategic reasoning benchmark. Noisy scouting (scout_accuracy config).
+     Charge bonus +2, ambush bonus +2, sovereign defense removed.
+v9: Sovereign defense bonus. Wider starting separation.
 v8: Anti-Goodhart measurement overhaul. No game rule changes.
-
-v7 changes:
-- Supply chain hops limited by max_supply_hops (default 2) — supply no longer infinite.
-- Scout/charge costs raised to 2 Shih.
+v7: Supply chain hops limited by max_supply_hops. Scout/charge costs raised.
 """
 
 import json
 import os
+import random as _random_module
 from enum import Enum
 from typing import Optional, Tuple, List, Dict, Any
 from models import Force
@@ -46,6 +47,7 @@ def _load_order_config() -> Dict:
         'charge_cost': 2,
         'supply_range': 2,
         'max_supply_hops': 2,
+        'scout_accuracy': 0.7,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -102,6 +104,45 @@ def is_adjacent(current: Tuple[int, int], target: Tuple[int, int]) -> bool:
 def within_range(pos1: Tuple[int, int], pos2: Tuple[int, int], max_range: int) -> bool:
     """Check if two positions are within a given range."""
     return hex_distance(pos1[0], pos1[1], pos2[0], pos2[1]) <= max_range
+
+
+def _power_band(power: int) -> str:
+    """Return the noisy band for a power value: low (1-2), mid (3), high (4-5)."""
+    if power <= 2:
+        return 'band_low'
+    elif power == 3:
+        return 'band_mid'
+    else:
+        return 'band_high'
+
+
+def resolve_scout(
+    actual_power: int,
+    scout_accuracy: float = 0.7,
+    rng=None,
+) -> Dict[str, Any]:
+    """
+    Resolve a noisy scout.
+
+    With probability scout_accuracy, return the exact power.
+    Otherwise, return a truthful but less informative band:
+      band_low (1-2), band_mid (3), band_high (4-5).
+
+    Returns:
+        {'type': 'exact', 'power': int} or
+        {'type': 'band', 'band': str, 'power_range': list}
+    """
+    r = rng if rng else _random_module
+    if r.random() < scout_accuracy:
+        return {'type': 'exact', 'power': actual_power}
+    else:
+        band = _power_band(actual_power)
+        if band == 'band_low':
+            return {'type': 'band', 'band': band, 'power_range': [1, 2]}
+        elif band == 'band_mid':
+            return {'type': 'band', 'band': band, 'power_range': [3]}
+        else:
+            return {'type': 'band', 'band': band, 'power_range': [4, 5]}
 
 
 def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3,
@@ -405,7 +446,10 @@ def resolve_orders(
         if combat_result.get('sovereign_captured'):
             results['sovereign_captured'] = combat_result['sovereign_captured']
 
-    # Phase 6: Apply Scouts
+    # Phase 6: Apply Scouts (noisy scouting — v10)
+    cfg = _load_order_config()
+    scout_accuracy = cfg.get('scout_accuracy', 0.7)
+
     for order, pid in valid_orders:
         if order.order_type == OrderType.SCOUT:
             player = game_state.get_player_by_id(pid)
@@ -413,18 +457,45 @@ def resolve_orders(
             if player and opponent:
                 target_force = opponent.get_force_by_id(order.scout_target_id)
                 if target_force and target_force.alive and within_range(order.force.position, target_force.position, 2):
-                    # Reveal to this player only (not public)
-                    power_val = target_force.power if target_force.power is not None else 0
-                    player.known_enemy_powers[target_force.id] = power_val
-                    results['scouts'].append({
+                    actual_power = target_force.power if target_force.power is not None else 0
+                    scout_result = resolve_scout(actual_power, scout_accuracy)
+
+                    scout_entry = {
                         'scouting_force': order.force.id,
                         'scouted_force': target_force.id,
-                        'revealed_power': power_val,
+                        'actual_power': actual_power,
                         'player': pid,
-                    })
-                    game_state.log.append({
-                        'turn': game_state.turn, 'phase': 'resolve',
-                        'event': f'{order.force.id} scouted {target_force.id}: power {power_val} (private to {pid})',
-                    })
+                    }
+
+                    if scout_result['type'] == 'exact':
+                        # Perfect intel — store exact power
+                        player.known_enemy_powers[target_force.id] = actual_power
+                        scout_entry['revealed_power'] = actual_power
+                        scout_entry['scout_type'] = 'exact'
+                        game_state.log.append({
+                            'turn': game_state.turn, 'phase': 'resolve',
+                            'event': f'{order.force.id} scouted {target_force.id}: power {actual_power} (private to {pid})',
+                        })
+                    else:
+                        # Noisy intel — store band as negative sentinel
+                        # Convention: known_enemy_powers stores exact int for exact,
+                        # or we store band info separately.
+                        # For backward compat, store the band as a negative:
+                        # -1 = band_low (1-2), -3 = band_mid (3), -4 = band_high (4-5)
+                        band = scout_result['band']
+                        band_sentinel = {'band_low': -1, 'band_mid': -3, 'band_high': -4}[band]
+                        player.known_enemy_powers[target_force.id] = band_sentinel
+                        scout_entry['revealed_band'] = band
+                        scout_entry['power_range'] = scout_result['power_range']
+                        scout_entry['scout_type'] = 'band'
+                        game_state.log.append({
+                            'turn': game_state.turn, 'phase': 'resolve',
+                            'event': (
+                                f'{order.force.id} scouted {target_force.id}: '
+                                f'{band} {scout_result["power_range"]} (private to {pid})'
+                            ),
+                        })
+
+                    results['scouts'].append(scout_entry)
 
     return results

@@ -1,15 +1,17 @@
 """
-Upkeep for The Unfought Battle v9.
+Upkeep for The Unfought Battle v10.
 
 After orders resolve, the board settles. Resources flow. The game checks
 whether anyone has won — not through combat, but through position.
 
+v10: Strategic reasoning benchmark. Domination requires 4 turns (was 3).
+v9: Sovereign defense bonus. Wider starting separation.
 v8: Anti-Goodhart measurement overhaul. No game rule changes.
 v7: Noose fires every 6 turns. Simultaneous sovereign death handled as draw.
 
 Victory conditions, in order of glory:
 1. Sovereign Capture — you found and destroyed the power-1 force. Decisive.
-2. Domination — you held 2+ Contentious hexes for 3 consecutive turns.
+2. Domination — you held 2+ Contentious hexes for 4 consecutive turns.
 3. Elimination — every enemy force is gone. Pyrrhic, but effective.
 """
 
@@ -25,7 +27,7 @@ def load_upkeep_config() -> Dict:
     defaults = {
         'base_shih_income': 1,
         'contentious_shih_bonus': 2,
-        'domination_turns_required': 3,
+        'domination_turns_required': 4,
         'domination_hexes_required': 2,
         'max_shih': 8,
         'shrink_interval': 5,

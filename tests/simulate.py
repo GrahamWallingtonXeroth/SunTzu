@@ -1,16 +1,16 @@
 """
-Simulation harness for The Unfought Battle v9.
+Simulation harness for The Unfought Battle v10.
 
 Provides AI strategy players and a game runner that can play thousands of
 games to measure emergent properties. The strategies range from brain-dead
 (random) to competent (heuristic), allowing us to test whether the game
 rewards skill, creates diverse outcomes, and avoids degenerate states.
 
-v8: Anti-Goodhart overhaul. Added 5 adversarial/ablation strategies to
-stress-test the measurement layer: SmartPassive (intelligent passivity),
-NeverScoutVariant (scouting ablation), NoChargeVariant (charge ablation),
-PowerBlind (emergence test), DominationStaller (degenerate exploit).
-Per-player supply tracking. 14 strategies total.
+v10: Strategic reasoning benchmark. Charge bonus +2, ambush bonus +2,
+     sovereign defense removed. AggressiveV10 and BlitzerV10 replace
+     scout-before-charge with charge-first. Noisy scouting support.
+v9: Sovereign defense bonus. Wider starting separation.
+v8: Anti-Goodhart overhaul. Added adversarial/ablation strategies.
 
 This module is the engine. The tests are in test_gameplay.py.
 """
@@ -29,7 +29,7 @@ from upkeep import perform_upkeep
 from map_gen import get_hex_neighbors, hex_distance, is_valid_hex, BOARD_SIZE, distance_from_center
 from models import Force, Player
 
-MAX_TURNS = 30  # Safety valve — v9 games run longer (sovereign defense bonus)
+MAX_TURNS = 30  # Safety valve — v10 games may run longer with multi-tier strategies
 
 
 @dataclass
@@ -215,9 +215,10 @@ class RandomStrategy(Strategy):
 
 class AggressiveStrategy(Strategy):
     """
-    Rush toward the center with strong forces. Protect the sovereign.
-    Attack enemies with power-4/5, use charge to close distance,
-    and fortify when holding a position or facing adjacent threats.
+    v10: Charge-first sovereign rush. Strong forces charge on sight without
+    scouting first (charge bonus +2 makes blind charges profitable). All
+    forces scout when no enemies are visible to find the sovereign. Once
+    sovereign location is known, converge and charge.
     """
     name = "aggressive"
 
@@ -229,19 +230,29 @@ class AggressiveStrategy(Strategy):
 
     def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
         player = game_state.get_player_by_id(player_id)
+        opponent = game_state.get_opponent(player_id)
         orders = []
         contentious = _contentious_hexes(game_state)
         center = (3, 3)
         alive = player.get_alive_forces()
+
+        # Find known enemy sovereign location
+        sovereign_pos = None
+        if opponent:
+            for fid, power in player.known_enemy_powers.items():
+                if power == 1:
+                    ef = opponent.get_force_by_id(fid)
+                    if ef and ef.alive:
+                        sovereign_pos = ef.position
+                        break
 
         for force in alive:
             enemies = _visible_enemies(force, player_id, game_state, max_range=2)
             enemies_adjacent = [e for e in enemies
                                if hex_distance(force.position[0], force.position[1],
                                                e.position[0], e.position[1]) <= 1]
-            on_contentious = any(force.position == c for c in contentious)
 
-            # Sovereign: advance toward center but stop when enemies are near
+            # Sovereign: advance toward center but flee from adjacent enemies
             if force.is_sovereign:
                 if enemies_adjacent:
                     nearest = min(enemies_adjacent, key=lambda e: hex_distance(
@@ -252,57 +263,41 @@ class AggressiveStrategy(Strategy):
                             m[0], m[1], nearest.position[0], nearest.position[1]))
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 elif enemies and _can_order(force, player, OrderType.FORTIFY):
-                    # Enemies visible but not adjacent — fortify, don't advance
                     orders.append(Order(OrderType.FORTIFY, force))
                 else:
-                    # No enemies in sight — advance toward center
                     best = _move_toward(force, center, game_state)
                     if best:
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 continue
 
-            # On contentious hex with enemies near: fortify to hold it
-            if on_contentious and enemies_adjacent:
-                if _can_order(force, player, OrderType.FORTIFY):
-                    orders.append(Order(OrderType.FORTIFY, force))
+            # If sovereign found, rush it with power 4-5
+            if sovereign_pos and force.power and force.power >= 4:
+                dist = hex_distance(force.position[0], force.position[1],
+                                   sovereign_pos[0], sovereign_pos[1])
+                if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
+                    orders.append(Order(OrderType.CHARGE, force, target_hex=sovereign_pos))
+                    continue
+                best = _move_toward(force, sovereign_pos, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
                     continue
 
-            # Strong forces (power 4-5): attack strategically
-            # v9: scout unscouted enemies first (sovereign defense bonus means
-            # blind charges against the sovereign often bounce off)
+            # Strong forces (power 4-5): charge-first, no scout delay
             if force.power and force.power >= 4 and enemies:
-                unscouted_nearby = [e for e in enemies
-                                    if e.id not in player.known_enemy_powers]
-                if unscouted_nearby and _can_order(force, player, OrderType.SCOUT):
-                    # Scout before charging to avoid wasting charge on sovereign
-                    orders.append(Order(OrderType.SCOUT, force,
-                                        scout_target_id=unscouted_nearby[0].id))
+                # Charge the nearest enemy directly
+                target_enemy = min(enemies, key=lambda e: hex_distance(
+                    force.position[0], force.position[1], e.position[0], e.position[1]))
+                dist_e = hex_distance(force.position[0], force.position[1],
+                                     target_enemy.position[0], target_enemy.position[1])
+                if dist_e <= 2 and _can_order(force, player, OrderType.CHARGE):
+                    orders.append(Order(OrderType.CHARGE, force, target_hex=target_enemy.position))
+                    continue
+                best = _move_toward(force, target_enemy.position, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
                     continue
 
-                # Prefer known-weaker targets, avoid known-stronger
-                best_target = None
-                best_target_dist = 999
-                for e in enemies:
-                    if e.id in player.known_enemy_powers:
-                        known_pwr = player.known_enemy_powers[e.id]
-                        if known_pwr >= force.power:
-                            continue  # Skip known-stronger enemies
-                    dist_e = hex_distance(force.position[0], force.position[1],
-                                         e.position[0], e.position[1])
-                    if dist_e < best_target_dist:
-                        best_target = e
-                        best_target_dist = dist_e
-
-                if best_target:
-                    if best_target_dist <= 2 and _can_order(force, player, OrderType.CHARGE):
-                        orders.append(Order(OrderType.CHARGE, force, target_hex=best_target.position))
-                        continue
-                    best = _move_toward(force, best_target.position, game_state)
-                    if best:
-                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                        continue
-
-            # Mid-power forces (2-3): scout unscouted enemies before engaging
+            # Mid/low power forces (2-3): scout visible enemies to find sovereign
             if force.power and force.power in (2, 3) and enemies:
                 unscouted = [e for e in enemies if e.id not in player.known_enemy_powers]
                 if unscouted and _can_order(force, player, OrderType.SCOUT):
@@ -314,12 +309,16 @@ class AggressiveStrategy(Strategy):
                 orders.append(Order(OrderType.FORTIFY, force))
                 continue
 
-            # No immediate threats: advance toward contentious hexes
-            uncontrolled = [c for c in contentious if game_state.get_force_at_position(c) is None
-                           or game_state.get_force_owner(game_state.get_force_at_position(c).id).id != player_id]
-            if uncontrolled:
-                target = min(uncontrolled, key=lambda c: hex_distance(
-                    force.position[0], force.position[1], c[0], c[1]))
+            # Default: advance toward enemy base / contentious hexes
+            # Aim toward enemy cluster rather than just contentious hexes
+            if opponent:
+                opp_alive = opponent.get_alive_forces()
+                if opp_alive:
+                    avg_q = sum(f.position[0] for f in opp_alive) // len(opp_alive)
+                    avg_r = sum(f.position[1] for f in opp_alive) // len(opp_alive)
+                    target = (avg_q, avg_r)
+                else:
+                    target = center
             else:
                 target = center
 
@@ -890,10 +889,10 @@ class SovereignHunterStrategy(Strategy):
 
 class BlitzerStrategy(Strategy):
     """
-    Advance together, use charge aggressively. Attacks any visible enemy with
-    power-4/5, charges to close range-2 gaps. Counter to defensive/position
-    strategies that sit on hexes. Weak against scouting strategies that know
-    where it's coming from.
+    v10: Charge-first blitz. Power 4-5 forces charge any visible enemy
+    without scouting first (charge bonus +2 makes this profitable).
+    Low-power forces scout. Advances as a group. Counter to defensive/
+    position strategies. Weak against scouting strategies.
     """
     name = "blitzer"
 
@@ -939,7 +938,6 @@ class BlitzerStrategy(Strategy):
                 elif enemies_near and _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
                 else:
-                    # Move toward group center of mass
                     non_sov = [f for f in alive if not f.is_sovereign]
                     if non_sov:
                         avg_q = sum(f.position[0] for f in non_sov) // len(non_sov)
@@ -961,14 +959,8 @@ class BlitzerStrategy(Strategy):
                     orders.append(Order(OrderType.MOVE, force, target_hex=best))
                     continue
 
-            # Power-4/5: v9 — scout first if enemies unknown, then charge
+            # Power-4/5: charge-first, no scout delay (v10)
             if force.power and force.power >= 4 and enemies_near:
-                unscouted = [e for e in enemies_near
-                             if e.id not in player.known_enemy_powers]
-                if unscouted and _can_order(force, player, OrderType.SCOUT):
-                    orders.append(Order(OrderType.SCOUT, force,
-                                        scout_target_id=unscouted[0].id))
-                    continue
                 target_enemy = min(enemies_near, key=lambda e: hex_distance(
                     force.position[0], force.position[1], e.position[0], e.position[1]))
                 dist = hex_distance(force.position[0], force.position[1],
@@ -981,7 +973,7 @@ class BlitzerStrategy(Strategy):
                     orders.append(Order(OrderType.MOVE, force, target_hex=best))
                     continue
 
-            # Power-2/3: scout visible enemies
+            # Power-2/3: scout visible enemies (low-power scouts)
             if force.power and force.power <= 3 and enemies_near:
                 unscouted = [e for e in enemies_near if e.id not in player.known_enemy_powers]
                 if unscouted and _can_order(force, player, OrderType.SCOUT):
@@ -1390,14 +1382,19 @@ def run_game(
                         if opp_pid not in record.sovereign_revealed_turn:
                             record.sovereign_revealed_turn[opp_pid] = game.turn
 
-        # Track sovereign revelation via scouting
+        # Track sovereign revelation via scouting (exact or band)
         for scout_result in result.get('scouts', []):
-            if scout_result.get('revealed_power') == 1:
+            is_sov_reveal = scout_result.get('revealed_power') == 1
+            # Band reveal: band_low includes power 1-2
+            if not is_sov_reveal and scout_result.get('scout_type') == 'band':
+                if scout_result.get('revealed_band') == 'band_low':
+                    if scout_result.get('actual_power') == 1:
+                        is_sov_reveal = True
+            if is_sov_reveal:
                 target_id = scout_result.get('scouted_force')
                 for pid in ['p1', 'p2']:
                     p = game.get_player_by_id(pid)
                     if p and p.get_force_by_id(target_id):
-                        # This is the force's owner — the OTHER player discovered it
                         opp_pid = 'p2' if pid == 'p1' else 'p1'
                         if opp_pid not in record.sovereign_revealed_turn:
                             record.sovereign_revealed_turn[opp_pid] = game.turn

@@ -1,20 +1,14 @@
 """
-Combat resolution for The Unfought Battle v9.
+Combat resolution for The Unfought Battle v10.
 
 Combat is decisive but not always lethal. Both power values are revealed
 permanently — even winning costs you the secrecy that was protecting you.
 
-v9: Sovereign defense bonus (+2 when defending). Wider starting separation.
-    Fixed strategy ladder. Phase 5 ready (CLI play mode).
-
-v8: Anti-Goodhart measurement overhaul. No game rule changes.
-
-v7 changes:
-- Charge attack bonus reduced to +1 (was +2 in v6). Creates intransitive
-  rock-paper-scissors dynamics between aggressive, ambush, and blitzer strategies.
-- Support bonus: +1 per adjacent friendly force, capped at +2.
-- Retreat threshold 2: losers survive when power diff ≤ 2.
-- Combat variance: -2 to +2.
+v10: Strategic reasoning benchmark. Charge bonus +2, ambush bonus +2,
+     sovereign defense removed. Metagame rebalanced with multi-tier pool.
+v9: Sovereign defense bonus. Wider starting separation.
+v8: Anti-Goodhart measurement overhaul.
+v7: Charge +1, support, retreat threshold 2, combat variance ±2.
 """
 
 import json
@@ -32,8 +26,8 @@ def load_combat_config() -> Dict:
     defaults = {
         'fortify_bonus': 2,
         'difficult_defense_bonus': 1,
-        'ambush_bonus': 1,
-        'charge_attack_bonus': 1,
+        'ambush_bonus': 2,
+        'charge_attack_bonus': 2,
         'support_bonus': 1,
         'max_support_bonus': 2,
         'retreat_threshold': 2,
@@ -65,8 +59,8 @@ def calculate_effective_power(
 
     Base power (assigned value 1-5)
     + 2 if fortified this turn
-    + 1 if ambushing and defending
-    + 1 if charging and attacking
+    + 2 if ambushing and defending
+    + 2 if charging and attacking
     + 1 if defending on Difficult terrain
     + 1 per adjacent friendly force (max +2) — support bonus
     + 1 if sovereign (power 1) and defending — sovereign defense bonus

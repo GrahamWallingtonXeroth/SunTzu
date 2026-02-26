@@ -117,14 +117,14 @@ class TestVictoryConditions:
         # p1 controls 1 contentious (3,3) via p1_f1, put p1_f2 on another
         p1.forces[1].position = (4, 3)
         results = perform_upkeep(game)
-        assert results['winner'] is None  # Only 1 turn, need 3
+        assert results['winner'] is None  # Only 1 turn, need 4 (v10)
         assert p1.domination_turns == 1
 
-    def test_domination_victory_after_3_turns(self):
-        """v3: need 3 consecutive turns of holding 2+ contentious hexes."""
+    def test_domination_victory_after_4_turns(self):
+        """v10: need 4 consecutive turns of holding 2+ contentious hexes (was 3)."""
         game = make_upkeep_state()
         p1 = game.get_player_by_id('p1')
-        p1.domination_turns = 2  # Already held for 2 turns
+        p1.domination_turns = 3  # Already held for 3 turns
         p1.forces[0].position = (3, 3)
         p1.forces[1].position = (4, 3)
 

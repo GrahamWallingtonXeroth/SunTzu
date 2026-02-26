@@ -261,7 +261,13 @@ class TestOrderResolution:
         p1_orders = [Order(OrderType.SCOUT, scout_force, scout_target_id=target_force.id)]
         results = resolve_orders(p1_orders, [], game)
         assert len(results['scouts']) == 1
-        assert results['scouts'][0]['revealed_power'] == 1
+        scout_entry = results['scouts'][0]
+        assert scout_entry['actual_power'] == 1
+        # Scout may return exact or band depending on noisy scouting
+        if scout_entry.get('scout_type') == 'exact':
+            assert scout_entry['revealed_power'] == 1
+        else:
+            assert scout_entry['revealed_band'] == 'band_low'
         assert target_force.id in p1.known_enemy_powers
         assert target_force.revealed is False  # Not publicly revealed
 

@@ -1,15 +1,13 @@
 """
-Game state management for The Unfought Battle v9.
+Game state management for The Unfought Battle v10.
 
 The state is the source of truth, but it's not the whole truth.
 Each player sees a filtered view — their own forces in full,
 enemy forces only within visibility range. What you know depends on
 what you've scouted and who you've fought.
 
-v3 changes:
-- Power values (1-5) replace fixed roles
-- Fog of war: visibility range 2
-- Shrinking board (shrink_stage)
+v10: Strategic reasoning benchmark. Metagame rebalanced with multi-tier pool.
+v9: Sovereign defense bonus. Wider starting separation.
 """
 
 from __future__ import annotations
