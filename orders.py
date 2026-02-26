@@ -1,17 +1,21 @@
 """
-Order processing for The Unfought Battle v5.
+Order processing for The Unfought Battle v7.
 
 Five orders. Movement is free. Special orders require supply lines.
 
 Move    — 0 Shih. Go to an adjacent non-Scorched hex. Always available.
-Charge  — 1 Shih. Move up to 2 hexes. +1 attack if entering combat. Requires supply.
-Scout   — 1 Shih. Stay put. Learn one enemy's power within 2 hexes. Requires supply.
-Fortify — 1 Shih. Stay put. +2 combat power this turn. Requires supply.
-Ambush  — 2 Shih. Stay put. +1 power when defending. Hidden. Requires supply.
+Charge  — 2 Shih. Move up to 2 hexes. +1 attack if entering combat. Requires supply.
+Scout   — 2 Shih. Stay put. Learn one enemy's power within 2 hexes. Requires supply.
+Fortify — 2 Shih. Stay put. +2 combat power this turn. Requires supply.
+Ambush  — 3 Shih. Stay put. +1 power when defending. Hidden. Requires supply.
 
-Supply: A force has supply if it is within 3 hexes of the Sovereign, or within
-3 hexes of a friendly force that has supply (forming a chain). Forces without
-supply can only Move.
+Supply: A force has supply if it can chain back to the Sovereign through
+friendly forces, where each link is within supply_range hexes and the total
+chain depth does not exceed max_supply_hops. Forces without supply can only Move.
+
+v7 changes:
+- Supply chain hops limited by max_supply_hops (default 2) — supply no longer infinite.
+- Scout/charge costs raised to 2 Shih.
 """
 
 import json

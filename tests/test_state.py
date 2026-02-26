@@ -1,4 +1,4 @@
-"""Tests for v5 game state management, initialization, and deployment."""
+"""Tests for v7 game state management, initialization, and deployment."""
 
 import pytest
 from state import (

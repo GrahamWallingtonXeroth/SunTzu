@@ -1,5 +1,5 @@
 """
-Gameplay tests for The Unfought Battle v6.
+Gameplay tests for The Unfought Battle v7.
 
 These tests define what a GOOD game looks like, then check whether this game
 meets that standard. Thresholds are set based on design goals, not current

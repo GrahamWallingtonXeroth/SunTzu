@@ -1,4 +1,4 @@
-"""Tests for v5 upkeep: shrinking board, victory conditions, Shih income, domination, mutual destruction."""
+"""Tests for v7 upkeep: shrinking board, victory conditions, Shih income, domination, mutual destruction."""
 
 import pytest
 from upkeep import perform_upkeep, check_victory, get_controlled_contentious, apply_board_shrink

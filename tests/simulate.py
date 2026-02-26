@@ -1,12 +1,15 @@
 """
-Simulation harness for The Unfought Battle v5.
+Simulation harness for The Unfought Battle v7.
 
 Provides AI strategy players and a game runner that can play thousands of
 games to measure emergent properties. The strategies range from brain-dead
 (random) to competent (heuristic), allowing us to test whether the game
 rewards skill, creates diverse outcomes, and avoids degenerate states.
 
-v5: Supply lines gate special orders. Forces without supply can only Move.
+v7: Power-aware strategies with emergent roles. Supply chain hops limit
+supply reach. Charge attack bonus rebalanced for intransitive metagame.
+9 strategies: random, aggressive, cautious, ambush, turtle, dodger,
+coordinator, hunter, blitzer.
 
 This module is the engine. The tests are in test_gameplay.py.
 """

@@ -1,10 +1,10 @@
 """
-Upkeep for The Unfought Battle v5.
+Upkeep for The Unfought Battle v7.
 
 After orders resolve, the board settles. Resources flow. The game checks
 whether anyone has won — not through combat, but through position.
 
-v5: Noose fires every 6 turns (gentler first shrink).
+v7: Noose fires every 6 turns. Simultaneous sovereign death handled as draw.
 
 Victory conditions, in order of glory:
 1. Sovereign Capture — you found and destroyed the power-1 force. Decisive.

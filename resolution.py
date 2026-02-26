@@ -1,14 +1,15 @@
 """
-Combat resolution for The Unfought Battle v5.
+Combat resolution for The Unfought Battle v7.
 
 Combat is decisive but not always lethal. Both power values are revealed
 permanently — even winning costs you the secrecy that was protecting you.
 
-v5 changes:
-- Ambush bonus reduced to +1 (was +2). Ambusher revealed after combat.
-- Charge attack bonus: +1 when charging into combat.
-- Combat variance widened: -2 to +2 (was -1/+1).
-- Retreat threshold raised to 2: losers survive when power diff ≤ 2.
+v7 changes:
+- Charge attack bonus reduced to +1 (was +2 in v6). Creates intransitive
+  rock-paper-scissors dynamics between aggressive, ambush, and blitzer strategies.
+- Support bonus: +1 per adjacent friendly force, capped at +2.
+- Retreat threshold 2: losers survive when power diff ≤ 2.
+- Combat variance: -2 to +2.
 """
 
 import json
