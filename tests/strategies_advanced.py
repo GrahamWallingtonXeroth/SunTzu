@@ -504,6 +504,25 @@ class BayesianHunterStrategy(StatefulStrategy):
                 entropy -= p * math.log2(p)
         return entropy
 
+    def _combined_sovereign_score(self, force_id: str) -> float:
+        """Blend Bayesian P(sovereign) with pattern-based suspicion.
+
+        v9 fix: Tier 3 was losing to Tier 2 because it only used Bayesian
+        probability and ignored the pattern-reading signals from StatefulStrategy.
+        This method combines both, giving Tier 3 the UNION of Tier 2's intuition
+        and its own probabilistic reasoning.
+        """
+        bayes_prob = self._sovereign_probability(force_id)
+        pattern_score = self._suspected_sovereign.get(force_id, 0.0)
+        # Normalize pattern score to [0, 1] range
+        max_pattern = max((abs(s) for s in self._suspected_sovereign.values()), default=1.0)
+        if max_pattern > 0:
+            pattern_norm = max(0.0, min(1.0, (pattern_score / max_pattern + 1.0) / 2.0))
+        else:
+            pattern_norm = 0.2  # uniform prior
+        # Weighted blend: Bayesian reasoning is primary, patterns supplement
+        return 0.6 * bayes_prob + 0.4 * pattern_norm
+
     def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
         ids = [f.id for f in player.forces]
         # Non-standard deployment: sovereign in position 4 (unexpected)
@@ -525,7 +544,7 @@ class BayesianHunterStrategy(StatefulStrategy):
         # Update Bayesian beliefs
         self._update_beliefs(player, opponent)
 
-        # Find highest-probability sovereign among visible enemies
+        # Find highest-probability sovereign using COMBINED score (v9 fix)
         alive_enemies = opponent.get_alive_forces()
 
         for force in player.get_alive_forces():
@@ -554,19 +573,25 @@ class BayesianHunterStrategy(StatefulStrategy):
                     orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 continue
 
-            # BAYESIAN ATTACK: use beliefs to choose targets
+            # EARLY GAME EXPLORATION: when no enemies visible and early turns,
+            # advance scout-role forces toward unexplored areas
+            if not enemies and game_state.turn < 6 and force.power and force.power <= 3:
+                best = _move_toward(force, center, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                    continue
+
+            # BAYESIAN + PATTERN ATTACK: use combined score to choose targets
             if force.power and force.power >= 4 and enemies:
-                # Score each enemy: high sov_prob + low expected power = good target
                 best_target = None
                 best_score = -999.0
                 for e in enemies:
-                    sov_p = self._sovereign_probability(e.id)
+                    sov_p = self._combined_sovereign_score(e.id)
                     exp_power = self._expected_power(e.id)
-                    # Score: probability of being sovereign, penalized by expected strength
                     score = sov_p * 10.0 - exp_power * 0.5
                     dist = hex_distance(force.position[0], force.position[1],
                                         e.position[0], e.position[1])
-                    score -= dist * 0.5  # prefer closer targets
+                    score -= dist * 0.5
                     if score > best_score:
                         best_score = score
                         best_target = e
@@ -589,12 +614,12 @@ class BayesianHunterStrategy(StatefulStrategy):
             if force.power and force.power <= 3 and enemies:
                 unscouted = [e for e in enemies if e.id not in player.known_enemy_powers]
                 if unscouted and _can_order(force, player, OrderType.SCOUT):
-                    # Pick the force where scouting gives the most information
                     best_target = max(unscouted, key=lambda e: self._info_gain(e.id))
                     orders.append(Order(OrderType.SCOUT, force, scout_target_id=best_target.id))
                     continue
 
             # AVOID STRONG ENEMIES: if adjacent to likely-strong enemy, retreat
+            retreated = False
             for e in enemies_adj:
                 exp = self._expected_power(e.id)
                 if force.power and exp > force.power + 1:
@@ -603,25 +628,28 @@ class BayesianHunterStrategy(StatefulStrategy):
                         best = max(moves, key=lambda m: hex_distance(
                             m[0], m[1], e.position[0], e.position[1]))
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                        retreated = True
                         break
-            else:
-                # Default: advance toward contentious or enemy with high sov probability
-                if alive_enemies:
-                    sov_target = max(alive_enemies,
-                                     key=lambda e: self._sovereign_probability(e.id))
-                    if self._sovereign_probability(sov_target.id) > 0.3:
-                        best = _move_toward(force, sov_target.position, game_state)
-                        if best:
-                            orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                            continue
+            if retreated:
+                continue
 
-                target = min(contentious, key=lambda c: hex_distance(
-                    force.position[0], force.position[1], c[0], c[1])) if contentious else center
-                best = _move_toward(force, target, game_state)
-                if best:
-                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                elif _can_order(force, player, OrderType.FORTIFY):
-                    orders.append(Order(OrderType.FORTIFY, force))
+            # Default: advance toward high-sov-probability enemy or contentious
+            if alive_enemies:
+                sov_target = max(alive_enemies,
+                                 key=lambda e: self._combined_sovereign_score(e.id))
+                if self._combined_sovereign_score(sov_target.id) > 0.3:
+                    best = _move_toward(force, sov_target.position, game_state)
+                    if best:
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                        continue
+
+            target = min(contentious, key=lambda c: hex_distance(
+                force.position[0], force.position[1], c[0], c[1])) if contentious else center
+            best = _move_toward(force, target, game_state)
+            if best:
+                orders.append(Order(OrderType.MOVE, force, target_hex=best))
+            elif _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
 
         return orders
 
@@ -744,7 +772,7 @@ def _evaluate_state(game_state: GameState, my_player_id: str) -> float:
              for e in opp_alive),
             default=10
         )
-        score += min(nearest_enemy_dist, 4) * 1.0  # safer sovereign = better
+        score += min(nearest_enemy_dist, 4) * 2.5  # safer sovereign = better (v9: increased weight)
 
     # Information advantage: how many enemy powers we know
     known_count = sum(1 for fid in player.known_enemy_powers
@@ -759,12 +787,12 @@ def _evaluate_state(game_state: GameState, my_player_id: str) -> float:
 
 class LookaheadStrategy(BayesianHunterStrategy):
     """
-    TIER 4: Evaluates actions by forward simulation across belief states.
+    TIER 4: Evaluates WHOLE-TURN plans by forward simulation across belief states.
 
-    Innovation: First strategy that CALCULATES. For each possible action,
-    it simulates the outcome across multiple sampled enemy power assignments,
-    estimates the opponent's likely response, and picks the action with the
-    highest expected evaluation.
+    Innovation: First strategy that CALCULATES. Generates candidate plans
+    (complete order sets for all forces), simulates each across multiple
+    sampled enemy power assignments, and picks the plan with the highest
+    expected evaluation.
 
     THIS IS THE ANTI-CALCULABILITY TEST. If this strategy dominates
     Tiers 1-3 by a large margin, the game is calculable — brute force
@@ -772,9 +800,10 @@ class LookaheadStrategy(BayesianHunterStrategy):
     game resists calculation — understanding and adaptation matter more
     than lookahead depth.
 
-    Implementation: Per-force greedy 1-ply search with belief sampling.
-    For each force, enumerate all valid orders, simulate each with K
-    sampled belief states, pick the one with highest average evaluation.
+    v9 fix: Replaced broken per-force greedy (which lost coordination)
+    with whole-turn plan evaluation. Generates 3 candidate plans:
+    baseline (Bayesian logic), aggressive variant, defensive variant.
+    Evaluates each as a COMPLETE set of orders across belief samples.
     """
     name = "lookahead"
 
@@ -790,59 +819,120 @@ class LookaheadStrategy(BayesianHunterStrategy):
             return list(self._belief)
         return random.sample(self._belief, n)
 
-    def _enumerate_orders(self, force: Force, player: Player,
-                          game_state: GameState) -> List[Order]:
-        """Enumerate all valid orders for a single force."""
-        options = []
+    def _generate_aggressive_variant(self, player_id: str, game_state: GameState,
+                                     rng: random.Random) -> Optional[List[Order]]:
+        """Generate an aggressive plan: charge/move toward enemies."""
+        player = game_state.get_player_by_id(player_id)
+        opponent = game_state.get_opponent(player_id)
+        if not player or not opponent:
+            return None
 
-        # Move options
-        for target in _valid_moves(force, game_state):
-            options.append(Order(OrderType.MOVE, force, target_hex=target))
+        orders = []
+        alive_enemies = opponent.get_alive_forces()
+        if not alive_enemies:
+            return None
 
-        # Scout options
-        if _can_order(force, player, OrderType.SCOUT):
-            opponent = game_state.get_opponent(player.id)
-            if opponent:
-                for enemy in opponent.get_alive_forces():
-                    if (hex_distance(force.position[0], force.position[1],
-                                     enemy.position[0], enemy.position[1]) <= 2
-                            and enemy.id not in player.known_enemy_powers):
-                        options.append(Order(OrderType.SCOUT, force,
-                                             scout_target_id=enemy.id))
-                        break  # one scout option is enough
+        # Find best sovereign target using combined score
+        sov_target = max(alive_enemies,
+                         key=lambda e: self._combined_sovereign_score(e.id))
+        sov_pos = sov_target.position
 
-        # Fortify
-        if _can_order(force, player, OrderType.FORTIFY):
-            options.append(Order(OrderType.FORTIFY, force))
+        for force in player.get_alive_forces():
+            if force.is_sovereign:
+                # Even aggressive plan protects sovereign
+                enemies_adj = [e for e in alive_enemies
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
+                if enemies_adj:
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        nearest = min(enemies_adj, key=lambda e: hex_distance(
+                            force.position[0], force.position[1],
+                            e.position[0], e.position[1]))
+                        best = max(moves, key=lambda m: hex_distance(
+                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                        continue
+                elif _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                    continue
+                best = _move_toward(force, (3, 3), game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                continue
 
-        # Ambush
-        if _can_order(force, player, OrderType.AMBUSH):
-            options.append(Order(OrderType.AMBUSH, force))
+            # Aggressive: charge if possible, otherwise move toward sovereign target
+            dist = hex_distance(force.position[0], force.position[1],
+                                sov_pos[0], sov_pos[1])
+            if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
+                orders.append(Order(OrderType.CHARGE, force, target_hex=sov_pos))
+                continue
 
-        # Charge options (sample a few, not all)
-        if _can_order(force, player, OrderType.CHARGE):
-            charges = _valid_charge_targets(force, game_state)
-            # Only charge toward enemy-occupied hexes
-            opponent = game_state.get_opponent(player.id)
-            if opponent:
-                enemy_positions = {f.position for f in opponent.get_alive_forces()}
-                enemy_charges = [c for c in charges if c in enemy_positions]
-                for target in enemy_charges[:3]:  # limit to 3 charge options
-                    options.append(Order(OrderType.CHARGE, force, target_hex=target))
+            best = _move_toward(force, sov_pos, game_state)
+            if best:
+                orders.append(Order(OrderType.MOVE, force, target_hex=best))
+            elif _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
 
-        if not options:
-            # Fallback: stay put
-            options.append(Order(OrderType.FORTIFY, force))
+        return orders if orders else None
 
-        return options
+    def _generate_defensive_variant(self, player_id: str, game_state: GameState,
+                                    rng: random.Random) -> Optional[List[Order]]:
+        """Generate a defensive plan: fortify on contentious hexes, scout enemies."""
+        player = game_state.get_player_by_id(player_id)
+        opponent = game_state.get_opponent(player_id)
+        if not player or not opponent:
+            return None
 
-    def _simulate_order(self, order: Order, all_my_orders: List[Order],
-                        player_id: str, game_state: GameState,
-                        belief_sample: Dict[str, int]) -> float:
-        """Simulate a single order and return evaluation score.
+        orders = []
+        contentious = _contentious_hexes(game_state)
+        center = (3, 3)
 
-        Clones the game state, applies the sampled enemy powers,
-        generates simple opponent orders, resolves, and evaluates.
+        for force in player.get_alive_forces():
+            enemies = _visible_enemies(force, player_id, game_state, max_range=2)
+
+            if force.is_sovereign:
+                # Defensive sovereign: fortify if enemies nearby, otherwise stay back
+                if enemies and _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                    continue
+                best = _move_toward(force, center, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                continue
+
+            # Scout if enemies visible and unscouted
+            if enemies and force.power and force.power <= 3:
+                unscouted = [e for e in enemies if e.id not in player.known_enemy_powers]
+                if unscouted and _can_order(force, player, OrderType.SCOUT):
+                    best_target = max(unscouted, key=lambda e: self._info_gain(e.id))
+                    orders.append(Order(OrderType.SCOUT, force, scout_target_id=best_target.id))
+                    continue
+
+            # Fortify on or move toward contentious hexes
+            if force.position in contentious and _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+                continue
+
+            if contentious:
+                target = min(contentious, key=lambda c: hex_distance(
+                    force.position[0], force.position[1], c[0], c[1]))
+            else:
+                target = center
+            best = _move_toward(force, target, game_state)
+            if best:
+                orders.append(Order(OrderType.MOVE, force, target_hex=best))
+            elif _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+
+        return orders if orders else None
+
+    def _simulate_full_plan(self, plan: List[Order], player_id: str,
+                            game_state: GameState,
+                            belief_sample: Dict[str, int]) -> float:
+        """Simulate a complete plan and return evaluation score.
+
+        v9 fix: evaluates ALL orders together instead of per-force.
         """
         try:
             clone = _clone_game_state(game_state)
@@ -855,38 +945,42 @@ class LookaheadStrategy(BayesianHunterStrategy):
                     if f and f.alive:
                         f.power = power
 
-            # Build our orders: the test order + simple orders for other forces
-            my_orders = [order]
+            # Remap orders to cloned forces
             player = clone.get_player_by_id(player_id)
+            cloned_orders = []
+            for order in plan:
+                cloned_force = player.get_force_by_id(order.force.id) if player else None
+                if cloned_force and cloned_force.alive:
+                    cloned_orders.append(Order(
+                        order.order_type, cloned_force,
+                        target_hex=order.target_hex,
+                        scout_target_id=order.scout_target_id,
+                    ))
 
             # Generate opponent orders
             opp_orders = _simple_opponent_orders(opponent, clone) if opponent else []
 
-            # Figure out which are p1 vs p2 orders
             if player_id == 'p1':
-                p1_orders, p2_orders = my_orders, opp_orders
+                p1_orders, p2_orders = cloned_orders, opp_orders
             else:
-                p1_orders, p2_orders = opp_orders, my_orders
+                p1_orders, p2_orders = opp_orders, cloned_orders
 
-            # Resolve
             resolve_orders(p1_orders, p2_orders, clone)
 
-            # Check for sovereign capture in the resolve step
-            # (perform_upkeep checks game end)
             sov_captured = None
             for p in clone.players:
                 sov = next((f for f in p.forces if f.power == 1), None)
                 if sov and not sov.alive:
-                    sov_captured = {'winner': clone.get_opponent(p.id).id if clone.get_opponent(p.id) else None}
+                    opp = clone.get_opponent(p.id)
+                    sov_captured = {'winner': opp.id if opp else None}
 
             perform_upkeep(clone, sov_captured)
-
             return _evaluate_state(clone, player_id)
         except Exception:
-            return 0.0  # simulation failed, neutral score
+            return 0.0
 
     def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
-        """1-ply search: evaluate each order for each force independently."""
+        """Whole-turn plan evaluation: compare 3 candidate plans across belief samples."""
         self._observe(player_id, game_state)
 
         player = game_state.get_player_by_id(player_id)
@@ -894,62 +988,37 @@ class LookaheadStrategy(BayesianHunterStrategy):
         if not opponent:
             return []
 
-        # Update beliefs
         self._update_beliefs(player, opponent)
         samples = self._sample_beliefs(self._n_samples)
         if not samples:
-            # Fallback to Bayesian behavior
             return super().plan(player_id, game_state, rng)
 
-        orders = []
-        for force in player.get_alive_forces():
-            # Sovereign uses Bayesian logic directly (don't risk it in search)
-            if force.is_sovereign:
-                # Use parent class logic for sovereign
-                enemies = _visible_enemies(force, player_id, game_state, max_range=2)
-                enemies_adj = [e for e in enemies
-                               if hex_distance(force.position[0], force.position[1],
-                                               e.position[0], e.position[1]) <= 1]
-                if enemies_adj:
-                    nearest = min(enemies_adj, key=lambda e: hex_distance(
-                        force.position[0], force.position[1],
-                        e.position[0], e.position[1]))
-                    moves = _valid_moves(force, game_state)
-                    if moves:
-                        best = max(moves, key=lambda m: hex_distance(
-                            m[0], m[1], nearest.position[0], nearest.position[1]))
-                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                        continue
-                elif enemies and _can_order(force, player, OrderType.FORTIFY):
-                    orders.append(Order(OrderType.FORTIFY, force))
-                    continue
-                best = _move_toward(force, (3, 3), game_state)
-                if best:
-                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                continue
+        # Generate candidate plans
+        baseline = super().plan(player_id, game_state, rng)
+        aggressive = self._generate_aggressive_variant(player_id, game_state, rng)
+        defensive = self._generate_defensive_variant(player_id, game_state, rng)
 
-            # For non-sovereign forces: evaluate all options
-            options = self._enumerate_orders(force, player, game_state)
-            if not options:
-                continue
+        candidates = [baseline]
+        if aggressive:
+            candidates.append(aggressive)
+        if defensive:
+            candidates.append(defensive)
 
-            best_order = options[0]
-            best_score = -9999.0
+        # Evaluate each complete plan across belief samples
+        best_plan = baseline
+        best_score = -9999.0
 
-            for option in options:
-                total_score = 0.0
-                for sample in samples:
-                    total_score += self._simulate_order(
-                        option, orders, player_id, game_state, sample)
-                avg_score = total_score / len(samples)
+        for candidate in candidates:
+            total = sum(
+                self._simulate_full_plan(candidate, player_id, game_state, s)
+                for s in samples
+            )
+            avg = total / len(samples)
+            if avg > best_score:
+                best_score = avg
+                best_plan = candidate
 
-                if avg_score > best_score:
-                    best_score = avg_score
-                    best_order = option
-
-            orders.append(best_order)
-
-        return orders
+        return best_plan
 
 
 # ===========================================================================
@@ -959,6 +1028,6 @@ class LookaheadStrategy(BayesianHunterStrategy):
 TIER1_STRATEGIES = []  # populated from simulate.py at import time
 TIER2_STRATEGIES = [PatternReaderStrategy(), SupplyCutterStrategy()]
 TIER3_STRATEGIES = [BayesianHunterStrategy()]
-TIER4_STRATEGIES = [LookaheadStrategy(n_samples=8)]
+TIER4_STRATEGIES = [LookaheadStrategy(n_samples=4)]
 
 ALL_ADVANCED_STRATEGIES = TIER2_STRATEGIES + TIER3_STRATEGIES + TIER4_STRATEGIES

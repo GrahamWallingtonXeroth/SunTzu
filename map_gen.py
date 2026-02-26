@@ -1,5 +1,5 @@
 """
-Map generation for The Unfought Battle v3.
+Map generation for The Unfought Battle v9.
 7x7 hex grid with axial coordinates. Tight enough that every hex matters.
 
 New in v3: center-distance calculation to support the shrinking board (Noose).
@@ -121,12 +121,12 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
             map_data[(q, r)] = Hex(q=q, r=r, terrain='Open')
 
     # Starting positions: cluster centers for path balance
-    p1_start = (1, 2)
-    p2_start = (5, 4)
+    p1_start = (0, 2)
+    p2_start = (6, 4)
 
     # All starting positions (for protected zone calculation)
-    p1_positions = [(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)]
-    p2_positions = [(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)]
+    p1_positions = [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2)]
+    p2_positions = [(6, 5), (6, 4), (6, 3), (5, 5), (5, 4)]
 
     # Place 3 Contentious hexes in the center zone (q=2-4, r=2-4)
     center_min = size // 2 - 1  # 2

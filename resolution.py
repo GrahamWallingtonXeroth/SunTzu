@@ -1,8 +1,11 @@
 """
-Combat resolution for The Unfought Battle v8.
+Combat resolution for The Unfought Battle v9.
 
 Combat is decisive but not always lethal. Both power values are revealed
 permanently — even winning costs you the secrecy that was protecting you.
+
+v9: Sovereign defense bonus (+2 when defending). Wider starting separation.
+    Fixed strategy ladder. Phase 5 ready (CLI play mode).
 
 v8: Anti-Goodhart measurement overhaul. No game rule changes.
 
@@ -34,6 +37,7 @@ def load_combat_config() -> Dict:
         'support_bonus': 1,
         'max_support_bonus': 2,
         'retreat_threshold': 2,
+        'sovereign_defense_bonus': 1,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:
@@ -65,6 +69,7 @@ def calculate_effective_power(
     + 1 if charging and attacking
     + 1 if defending on Difficult terrain
     + 1 per adjacent friendly force (max +2) — support bonus
+    + 1 if sovereign (power 1) and defending — sovereign defense bonus
     + random(-2, -1, 0, +1, +2) combat variance
     """
     config = load_combat_config()
@@ -100,6 +105,10 @@ def calculate_effective_power(
             adjacent_friendlies * config['support_bonus'],
             config['max_support_bonus']
         )
+
+    # Sovereign defense bonus: sovereign is harder to capture
+    if is_defender and force.power == SOVEREIGN_POWER:
+        power += config.get('sovereign_defense_bonus', 2)
 
     # Combat variance: -2 to +2
     if apply_variance:

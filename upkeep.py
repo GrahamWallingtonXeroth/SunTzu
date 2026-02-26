@@ -1,5 +1,5 @@
 """
-Upkeep for The Unfought Battle v8.
+Upkeep for The Unfought Battle v9.
 
 After orders resolve, the board settles. Resources flow. The game checks
 whether anyone has won — not through combat, but through position.
@@ -27,8 +27,8 @@ def load_upkeep_config() -> Dict:
         'contentious_shih_bonus': 2,
         'domination_turns_required': 3,
         'domination_hexes_required': 2,
-        'max_shih': 10,
-        'shrink_interval': 6,
+        'max_shih': 8,
+        'shrink_interval': 5,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:

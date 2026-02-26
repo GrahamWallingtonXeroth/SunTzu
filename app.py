@@ -1,5 +1,5 @@
 """
-API for The Unfought Battle v3.
+API for The Unfought Battle v9.
 
 Every endpoint respects the fog of war. You never see more than your
 player is supposed to know. The state endpoint requires a player_id

@@ -1,5 +1,5 @@
 """
-Simulation harness for The Unfought Battle v8.
+Simulation harness for The Unfought Battle v9.
 
 Provides AI strategy players and a game runner that can play thousands of
 games to measure emergent properties. The strategies range from brain-dead
@@ -29,7 +29,7 @@ from upkeep import perform_upkeep
 from map_gen import get_hex_neighbors, hex_distance, is_valid_hex, BOARD_SIZE, distance_from_center
 from models import Force, Player
 
-MAX_TURNS = 25  # Safety valve — Noose should end games well before this
+MAX_TURNS = 30  # Safety valve — v9 games run longer (sovereign defense bonus)
 
 
 @dataclass
@@ -268,8 +268,18 @@ class AggressiveStrategy(Strategy):
                     continue
 
             # Strong forces (power 4-5): attack strategically
+            # v9: scout unscouted enemies first (sovereign defense bonus means
+            # blind charges against the sovereign often bounce off)
             if force.power and force.power >= 4 and enemies:
-                # Prefer known-weaker targets, then unknown, avoid known-stronger
+                unscouted_nearby = [e for e in enemies
+                                    if e.id not in player.known_enemy_powers]
+                if unscouted_nearby and _can_order(force, player, OrderType.SCOUT):
+                    # Scout before charging to avoid wasting charge on sovereign
+                    orders.append(Order(OrderType.SCOUT, force,
+                                        scout_target_id=unscouted_nearby[0].id))
+                    continue
+
+                # Prefer known-weaker targets, avoid known-stronger
                 best_target = None
                 best_target_dist = 999
                 for e in enemies:
@@ -603,7 +613,8 @@ class NooseDodgerStrategy(Strategy):
                                if hex_distance(force.position[0], force.position[1],
                                                e.position[0], e.position[1]) <= 1]
 
-            # Sovereign: stay back, flee if threatened
+            # Sovereign: flee if threatened, otherwise move toward center
+            # v9: Noose at turn 5 means sovereign must start moving early
             if force.is_sovereign:
                 if enemies_adjacent:
                     nearest = min(enemies_adjacent, key=lambda e: hex_distance(
@@ -615,7 +626,11 @@ class NooseDodgerStrategy(Strategy):
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 elif enemies_near and _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
-                # Otherwise stay put
+                else:
+                    # Move toward center to dodge Noose
+                    best = _move_toward(force, center, game_state)
+                    if best:
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 continue
 
             on_contentious = any(force.position == c for c in contentious)
@@ -803,8 +818,9 @@ class SovereignHunterStrategy(Strategy):
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 continue
 
-            # If sovereign found, send power-3+ to kill it
-            if sovereign_pos and force.power and force.power >= 3:
+            # If sovereign found, send power-4+ to kill it
+            # v9: sovereign defense bonus means power-3 can't reliably kill
+            if sovereign_pos and force.power and force.power >= 4:
                 dist = hex_distance(force.position[0], force.position[1],
                                    sovereign_pos[0], sovereign_pos[1])
                 if dist <= 2 and dist >= 1 and _can_order(force, player, OrderType.CHARGE):
@@ -945,8 +961,14 @@ class BlitzerStrategy(Strategy):
                     orders.append(Order(OrderType.MOVE, force, target_hex=best))
                     continue
 
-            # Power-4/5: charge any visible enemy
+            # Power-4/5: v9 — scout first if enemies unknown, then charge
             if force.power and force.power >= 4 and enemies_near:
+                unscouted = [e for e in enemies_near
+                             if e.id not in player.known_enemy_powers]
+                if unscouted and _can_order(force, player, OrderType.SCOUT):
+                    orders.append(Order(OrderType.SCOUT, force,
+                                        scout_target_id=unscouted[0].id))
+                    continue
                 target_enemy = min(enemies_near, key=lambda e: hex_distance(
                     force.position[0], force.position[1], e.position[0], e.position[1]))
                 dist = hex_distance(force.position[0], force.position[1],

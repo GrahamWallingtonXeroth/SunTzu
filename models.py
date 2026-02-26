@@ -1,5 +1,5 @@
 """
-Data model for The Unfought Battle v3.
+Data model for The Unfought Battle v9.
 
 No more fixed roles. Each player assigns hidden power values (1-5) to their
 5 forces during deployment. Each value is used exactly once. Power 1 is the

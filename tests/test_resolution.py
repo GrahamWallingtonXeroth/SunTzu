@@ -71,8 +71,8 @@ class TestEffectivePower:
         f = Force(id='p1_f1', position=(3, 4), power=1, fortified=True, ambushing=True)
         game.players[0].add_force(f)
         power = calculate_effective_power(f, game, is_defender=True, hex_pos=(3, 4), apply_variance=False)
-        # 1 base + 2 fortify + 1 ambush + 1 difficult = 5
-        assert power == 5
+        # 1 base + 2 fortify + 1 ambush + 1 difficult + 1 sovereign defense = 6
+        assert power == 6
 
     def test_variance_in_range(self):
         game = make_combat_state()
@@ -85,14 +85,14 @@ class TestEffectivePower:
 
 class TestCombatResolution:
     def test_higher_power_wins(self):
-        """Power 5 vs 1 — attacker should always win (kill or retreat the defender)."""
+        """Power 5 vs Sovereign (1+1 defense bonus=2) — attacker should win."""
         game = make_combat_state()
         att = Force(id='p1_f1', position=(3, 3), power=5)
         dfd = Force(id='p2_f1', position=(4, 3), power=1)
         game.players[0].add_force(att)
         game.players[1].add_force(dfd)
 
-        rng = random.Random(100)
+        rng = random.Random(90)
         result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
         assert 'attacker_wins' in result['outcome']
         assert att.position == (4, 3)
@@ -318,14 +318,15 @@ class TestRetreatMechanic:
         assert dfd.alive is True
 
     def test_retreated_sovereign_not_captured(self):
-        """A Sovereign that retreats (power diff ≤ 1) is NOT captured."""
+        """A Sovereign that retreats (power diff ≤ retreat_threshold) is NOT captured.
+        v9: Sovereign has +1 defense bonus, so effective defense = 1+1 = 2."""
         game = make_combat_state()
-        att = Force(id='p1_f1', position=(3, 3), power=2)
-        dfd = Force(id='p2_f1', position=(4, 3), power=1)  # Sovereign
+        att = Force(id='p1_f1', position=(3, 3), power=3)
+        dfd = Force(id='p2_f1', position=(4, 3), power=1)  # Sovereign (eff 2 with defense bonus)
         game.players[0].add_force(att)
         game.players[1].add_force(dfd)
 
-        # Seed 0: both +1 → 3 vs 2, diff=1 → retreat (not kill)
+        # Seed 0: att=3 vs def=2 (1+1 sovereign bonus), diff≈1 → retreat (not kill)
         rng = random.Random(0)
         result = resolve_combat(att, 'p1', dfd, 'p2', (4, 3), game, rng=rng)
         assert result['outcome'] == 'attacker_wins_retreat'

@@ -1,4 +1,4 @@
-"""Tests for v8 game state management, initialization, and deployment."""
+"""Tests for v9 game state management, initialization, and deployment."""
 
 import pytest
 from state import (
@@ -41,11 +41,11 @@ class TestInitialization:
         assert len(contentious) == 3
 
     def test_players_start_at_opposite_sides(self, game):
-        """P1 starts left cluster near (1,2), P2 starts right cluster near (5,4)."""
+        """P1 starts left cluster near (0,2), P2 starts right cluster near (6,4)."""
         p1 = game.get_player_by_id('p1')
         p2 = game.get_player_by_id('p2')
-        p1_expected = {(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)}
-        p2_expected = {(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)}
+        p1_expected = {(0, 1), (0, 2), (0, 3), (1, 1), (1, 2)}
+        p2_expected = {(6, 5), (6, 4), (6, 3), (5, 5), (5, 4)}
         p1_positions = {f.position for f in p1.forces}
         p2_positions = {f.position for f in p2.forces}
         assert p1_positions == p1_expected
@@ -134,15 +134,15 @@ class TestPlayerView:
             assert f['power'] is not None
 
     def test_enemy_forces_hidden_by_fog(self, deployed_game):
-        """Enemy forces near (5,4) are far from p1 near (1,2) — fog of war hides them."""
+        """Enemy forces near (6,4) are far from p1 near (0,2) — fog of war hides them."""
         view = get_player_view(deployed_game, 'p1')
-        # p2 forces are at (5,3)-(6,4) cluster, p1 at (0,2)-(1,3) — far beyond visibility range
+        # p2 forces are at (5,4)-(6,5) cluster, p1 at (0,1)-(1,2) — far beyond visibility range
         assert len(view['enemy_forces']) == 0
 
     def test_enemy_forces_visible_when_close(self, deployed_game):
         """Move an enemy force close to p1's forces — it becomes visible."""
         p2 = deployed_game.get_player_by_id('p2')
-        p2.forces[0].position = (2, 1)  # Adjacent to p1_f2 at (1,1)
+        p2.forces[0].position = (2, 1)  # Adjacent to p1_f4 at (1,1)
         view = get_player_view(deployed_game, 'p1')
         visible_ids = [f['id'] for f in view['enemy_forces']]
         assert p2.forces[0].id in visible_ids
@@ -169,7 +169,7 @@ class TestPlayerView:
         p1 = deployed_game.get_player_by_id('p1')
         p2 = deployed_game.get_player_by_id('p2')
         # Move enemy close to p1 cluster and scout it
-        p2.forces[0].position = (2, 1)  # Within visibility of p1 at (1,1)
+        p2.forces[0].position = (2, 1)  # Within visibility of p1_f4 at (1,1)
         p1.known_enemy_powers[p2.forces[0].id] = 1
         view = get_player_view(deployed_game, 'p1')
         scouted = [f for f in view['enemy_forces'] if f.get('scouted')]
@@ -179,7 +179,7 @@ class TestPlayerView:
     def test_revealed_powers_visible(self, deployed_game):
         p2 = deployed_game.get_player_by_id('p2')
         p2.forces[0].revealed = True
-        p2.forces[0].position = (2, 1)  # Within visibility of p1 at (1,1)
+        p2.forces[0].position = (2, 1)  # Within visibility of p1_f4 at (1,1)
         view = get_player_view(deployed_game, 'p1')
         revealed = [f for f in view['enemy_forces'] if f.get('revealed')]
         assert len(revealed) == 1

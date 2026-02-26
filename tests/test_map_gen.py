@@ -105,9 +105,9 @@ class TestMapGeneration:
 
     def test_starting_positions_are_open(self):
         m = generate_map(seed=42)
-        # v4: starting cluster centers at (1,2) and (5,4)
-        p1_positions = [(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)]
-        p2_positions = [(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)]
+        # v9: starting cluster centers at (0,2) and (6,4)
+        p1_positions = [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2)]
+        p2_positions = [(6, 5), (6, 4), (6, 3), (5, 5), (5, 4)]
         for pos in p1_positions + p2_positions:
             assert m[pos].terrain == 'Open', f"Starting position {pos} should be Open"
 
@@ -120,8 +120,8 @@ class TestMapGeneration:
         m = generate_map(seed=42)
         contentious = [pos for pos, h in m.items() if h.terrain == 'Contentious']
         for ch in contentious:
-            p1_path = a_star_path((1, 2), ch, m)
-            p2_path = a_star_path((5, 4), ch, m)
+            p1_path = a_star_path((0, 2), ch, m)
+            p2_path = a_star_path((6, 4), ch, m)
             assert p1_path is not None
             assert p2_path is not None
 

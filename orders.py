@@ -1,5 +1,5 @@
 """
-Order processing for The Unfought Battle v8.
+Order processing for The Unfought Battle v9.
 
 Five orders. Movement is free. Special orders require supply lines.
 
@@ -40,12 +40,12 @@ class OrderType(Enum):
 def _load_order_config() -> Dict:
     """Load order-related config."""
     defaults = {
-        'scout_cost': 1,
-        'fortify_cost': 1,
-        'ambush_cost': 2,
-        'charge_cost': 1,
-        'supply_range': 3,
-        'max_supply_hops': 0,  # 0 = unlimited chain, >0 = max chain links
+        'scout_cost': 2,
+        'fortify_cost': 2,
+        'ambush_cost': 3,
+        'charge_cost': 2,
+        'supply_range': 2,
+        'max_supply_hops': 2,
     }
     config_path = os.path.join(os.path.dirname(__file__), 'config.json')
     try:

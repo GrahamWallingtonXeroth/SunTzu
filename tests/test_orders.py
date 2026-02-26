@@ -1,4 +1,4 @@
-"""Tests for v8 order processing: Move, Scout, Fortify, Ambush, Charge + supply lines + chain hops."""
+"""Tests for v9 order processing: Move, Scout, Fortify, Ambush, Charge + supply lines + chain hops."""
 
 import pytest
 from state import initialize_game, apply_deployment, GameState
@@ -105,8 +105,8 @@ class TestMoveValidation:
 
     def test_move_to_scorched_hex(self, game):
         p1 = game.get_player_by_id('p1')
-        force = p1.forces[0]  # at (0, 2)
-        target = (0, 1)  # adjacent to (0, 2)
+        force = p1.forces[0]  # at (0, 1)
+        target = (1, 0)  # adjacent to (0, 1)
         game.map_data[target].terrain = 'Scorched'
         order = Order(OrderType.MOVE, force, target_hex=target)
         with pytest.raises(OrderValidationError, match="Scorched"):
@@ -251,10 +251,12 @@ class TestOrderResolution:
         p2 = game.get_player_by_id('p2')
         scout_force = p1.forces[3]  # power 2
         target_force = p2.forces[0]  # power 1 (Sovereign)
-        scout_force.position = (3, 3)
-        target_force.position = (4, 3)
-        game.map_data[(3, 3)] = Hex(q=3, r=3, terrain='Open')
-        game.map_data[(4, 3)] = Hex(q=4, r=3, terrain='Open')
+        # v9: supply_range=2, max_hops=2. Supply chain:
+        #   sovereign(0,1)->p1_f5(1,2) dist=2 hop1, p1_f5(1,2)->scout(2,2) dist=1 hop2
+        scout_force.position = (2, 2)
+        target_force.position = (4, 2)  # within scout range 2 of (2,2)
+        game.map_data[(2, 2)] = Hex(q=2, r=2, terrain='Open')
+        game.map_data[(4, 2)] = Hex(q=4, r=2, terrain='Open')
 
         p1_orders = [Order(OrderType.SCOUT, scout_force, scout_target_id=target_force.id)]
         results = resolve_orders(p1_orders, [], game)

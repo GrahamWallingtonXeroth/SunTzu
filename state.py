@@ -1,5 +1,5 @@
 """
-Game state management for The Unfought Battle v3.
+Game state management for The Unfought Battle v9.
 
 The state is the source of truth, but it's not the whole truth.
 Each player sees a filtered view — their own forces in full,
@@ -104,16 +104,16 @@ def initialize_game(seed: int) -> GameState:
     config = load_config()
     board_size = config.get('board_size', BOARD_SIZE)
     starting_shih = config.get('starting_shih', 5)
-    max_shih = config.get('max_shih', 10)
+    max_shih = config.get('max_shih', 8)
     force_count = config.get('force_count', 5)
 
     game_id = str(uuid.uuid4())
     map_data = generate_map(seed, board_size)
 
-    # P1: left cluster, distance 2-4 from center, safe from first Noose
-    p1_positions = [(0, 2), (1, 1), (0, 3), (1, 2), (1, 3)][:force_count]
-    # P2: right cluster, distance 2-4 from center, symmetric to P1
-    p2_positions = [(6, 4), (5, 5), (6, 3), (5, 4), (5, 3)][:force_count]
+    # P1: left cluster, pushed back for wider separation (min 6 hexes to P2)
+    p1_positions = [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2)][:force_count]
+    # P2: right cluster, symmetric to P1, pushed back
+    p2_positions = [(6, 5), (6, 4), (6, 3), (5, 5), (5, 4)][:force_count]
 
     player1 = Player(id='p1', shih=starting_shih, max_shih=max_shih)
     for i, pos in enumerate(p1_positions, 1):

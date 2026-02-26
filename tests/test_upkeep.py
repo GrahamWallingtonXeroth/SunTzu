@@ -182,7 +182,7 @@ class TestVictoryConditions:
         # Place other forces safely near center
         p1.forces[1].position = (3, 2)
         p2.forces[1].position = (3, 4)
-        game.turn = 6  # shrink_interval = 6
+        game.turn = 5  # shrink_interval = 5
         results = perform_upkeep(game)
         assert results['winner'] == 'draw'
         assert results['victory_type'] == 'mutual_destruction'
@@ -192,14 +192,14 @@ class TestBoardShrink:
     def test_shrink_at_interval(self):
         """Board shrinks at turn multiples of shrink_interval."""
         game = make_upkeep_state()
-        game.turn = 6  # shrink_interval = 6
+        game.turn = 5  # shrink_interval = 5
         assert game.shrink_stage == 0
         perform_upkeep(game)
         assert game.shrink_stage == 1
 
     def test_no_shrink_before_interval(self):
         game = make_upkeep_state()
-        game.turn = 5  # Before shrink_interval of 6
+        game.turn = 4  # Before shrink_interval of 5
         perform_upkeep(game)
         assert game.shrink_stage == 0
 
@@ -233,7 +233,7 @@ class TestBoardShrink:
         p2 = game.get_player_by_id('p2')
         p2.forces[0].position = (0, 0)  # Sovereign at far corner
         p2.forces[1].position = (3, 2)  # Other force safe
-        game.turn = 6  # shrink_interval = 6
+        game.turn = 5  # shrink_interval = 5
         results = perform_upkeep(game)
         assert results['winner'] == 'p1'
         assert results['victory_type'] == 'sovereign_capture'
