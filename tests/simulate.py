@@ -221,16 +221,24 @@ class AggressiveStrategy(Strategy):
                                                e.position[0], e.position[1]) <= 1]
             on_contentious = any(force.position == c for c in contentious)
 
-            # Sovereign: stay safe — fortify or retreat
+            # Sovereign: advance toward center but stop when enemies are near
             if force.is_sovereign:
-                if enemies_adjacent and _can_order(force, player, OrderType.FORTIFY):
+                if enemies_adjacent:
+                    nearest = min(enemies_adjacent, key=lambda e: hex_distance(
+                        force.position[0], force.position[1], e.position[0], e.position[1]))
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        best = max(moves, key=lambda m: hex_distance(
+                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                elif enemies and _can_order(force, player, OrderType.FORTIFY):
+                    # Enemies visible but not adjacent — fortify, don't advance
                     orders.append(Order(OrderType.FORTIFY, force))
                 else:
+                    # No enemies in sight — advance toward center
                     best = _move_toward(force, center, game_state)
                     if best:
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                    elif _can_order(force, player, OrderType.FORTIFY):
-                        orders.append(Order(OrderType.FORTIFY, force))
                 continue
 
             # On contentious hex with enemies near: fortify to hold it
@@ -279,56 +287,152 @@ class AggressiveStrategy(Strategy):
 
 class CautiousStrategy(Strategy):
     """
-    Advance slowly. Fortify when near enemies. Scout when possible.
-    Protect the sovereign by retreating it toward center (not corner).
+    Intelligence-led offense. Scout first, then strike with information advantage.
+    Counter to ambush: scouts to find the sovereign, then hunts it while routing
+    around traps. Avoids attacking non-sovereign forces unless clearly stronger.
+    Weak against aggressive rush (spends time scouting while aggressive takes center).
     """
     name = "cautious"
 
     def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
         ids = [f.id for f in player.forces]
-        powers = [3, 5, 1, 4, 2]
+        powers = [3, 5, 1, 4, 2]  # Sovereign in middle, strong forces on flanks
         return dict(zip(ids, powers))
 
     def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
         player = game_state.get_player_by_id(player_id)
+        opponent = game_state.get_opponent(player_id)
         orders = []
         contentious = _contentious_hexes(game_state)
         center = (3, 3)
 
+        # Find known sovereign location
+        sovereign_pos = None
+        if opponent:
+            for fid, power in player.known_enemy_powers.items():
+                if power == 1:
+                    ef = opponent.get_force_by_id(fid)
+                    if ef and ef.alive:
+                        sovereign_pos = ef.position
+                        break
+
         for force in player.get_alive_forces():
             enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
-
-            # If enemies are adjacent and we're not the sovereign, fortify
             enemies_adjacent = [e for e in enemies_near
                                 if hex_distance(force.position[0], force.position[1],
                                                 e.position[0], e.position[1]) <= 1]
-            if enemies_adjacent and force.power and force.power > 1:
-                if _can_order(force, player, OrderType.FORTIFY):
-                    orders.append(Order(OrderType.FORTIFY, force))
-                    continue
 
-            # If enemies are in scout range and we haven't scouted them, scout
-            unscouted = [e for e in enemies_near if e.id not in player.known_enemy_powers]
-            if unscouted and _can_order(force, player, OrderType.SCOUT):
-                target = unscouted[0]
-                orders.append(Order(OrderType.SCOUT, force, scout_target_id=target.id))
+            # Sovereign: stay safe — flee from enemies or hold position
+            if force.is_sovereign:
+                if enemies_adjacent:
+                    nearest = min(enemies_adjacent, key=lambda e: hex_distance(
+                        force.position[0], force.position[1], e.position[0], e.position[1]))
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        best = max(moves, key=lambda m: hex_distance(
+                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                        continue
+                    if _can_order(force, player, OrderType.FORTIFY):
+                        orders.append(Order(OrderType.FORTIFY, force))
+                        continue
+                elif enemies_near and _can_order(force, player, OrderType.FORTIFY):
+                    # Enemies close but not adjacent — fortify defensively
+                    orders.append(Order(OrderType.FORTIFY, force))
+                else:
+                    best = _move_toward(force, center, game_state)
+                    if best:
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 continue
 
-            # If we're the sovereign and enemies are near, retreat toward center
-            if force.is_sovereign and enemies_adjacent:
-                best = _move_toward(force, center, game_state)
-                if best:
+            # PRIORITY 1: Hunt sovereign if found — NO RANGE LIMIT — send power-4/5
+            if sovereign_pos and force.power and force.power >= 4:
+                dist = hex_distance(force.position[0], force.position[1],
+                                   sovereign_pos[0], sovereign_pos[1])
+                if dist == 1:
+                    # Adjacent to sovereign — attack directly
+                    orders.append(Order(OrderType.MOVE, force, target_hex=sovereign_pos))
+                    continue
+                if dist == 2 and _can_order(force, player, OrderType.CHARGE):
+                    orders.append(Order(OrderType.CHARGE, force, target_hex=sovereign_pos))
+                    continue
+                # Move toward sovereign, avoiding non-sovereign enemy hexes
+                moves = _valid_moves(force, game_state)
+                if moves:
+                    safe = [m for m in moves if game_state.get_force_at_position(m) is None]
+                    pool = safe if safe else moves
+                    best = min(pool, key=lambda m: hex_distance(
+                        m[0], m[1], sovereign_pos[0], sovereign_pos[1]))
                     orders.append(Order(OrderType.MOVE, force, target_hex=best))
                     continue
 
-            # Otherwise advance toward center
+            # PRIORITY 2: Attack known sovereign if adjacent (use charge for bonus)
+            sov_attacked = False
+            for enemy in enemies_adjacent:
+                if enemy.id in player.known_enemy_powers and player.known_enemy_powers[enemy.id] == 1:
+                    if _can_order(force, player, OrderType.CHARGE):
+                        orders.append(Order(OrderType.CHARGE, force, target_hex=enemy.position))
+                    else:
+                        orders.append(Order(OrderType.MOVE, force, target_hex=enemy.position))
+                    sov_attacked = True
+                    break
+            if sov_attacked:
+                continue
+
+            # PRIORITY 3: Scout unscouted enemies (only if sovereign not yet found)
+            if not sovereign_pos:
+                unscouted = [e for e in enemies_near if e.id not in player.known_enemy_powers]
+                if unscouted and _can_order(force, player, OrderType.SCOUT):
+                    orders.append(Order(OrderType.SCOUT, force, scout_target_id=unscouted[0].id))
+                    continue
+
+            # PRIORITY 4: Attack known-weaker enemies (use charge for decisive kills)
+            attacked = False
+            for enemy in enemies_near:
+                if enemy.id in player.known_enemy_powers:
+                    known_power = player.known_enemy_powers[enemy.id]
+                    if force.power and force.power >= known_power + 2:
+                        dist = hex_distance(force.position[0], force.position[1],
+                                           enemy.position[0], enemy.position[1])
+                        if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
+                            orders.append(Order(OrderType.CHARGE, force, target_hex=enemy.position))
+                        elif dist <= 1:
+                            orders.append(Order(OrderType.MOVE, force, target_hex=enemy.position))
+                        else:
+                            continue
+                        attacked = True
+                        break
+            if attacked:
+                continue
+
+            # PRIORITY 5: Retreat from known-stronger enemies
+            retreated = False
+            for enemy in enemies_adjacent:
+                if enemy.id in player.known_enemy_powers:
+                    known_power = player.known_enemy_powers[enemy.id]
+                    if force.power and known_power >= force.power + 1:
+                        moves = _valid_moves(force, game_state)
+                        if moves:
+                            best = max(moves, key=lambda m: hex_distance(
+                                m[0], m[1], enemy.position[0], enemy.position[1]))
+                            orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                            retreated = True
+                            break
+            if retreated:
+                continue
+
+            # PRIORITY 6: Hold contentious hexes
+            on_contentious = any(force.position == c for c in contentious)
+            if on_contentious and _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+                continue
+
+            # PRIORITY 7: Advance toward contentious/center
             target = min(contentious, key=lambda c: hex_distance(
                 force.position[0], force.position[1], c[0], c[1])) if contentious else center
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
-            elif _can_order(force, player, OrderType.FORTIFY):
-                orders.append(Order(OrderType.FORTIFY, force))
 
         return orders
 
@@ -379,8 +483,9 @@ class AmbushStrategy(Strategy):
 
 class TurtleStrategy(Strategy):
     """
-    Never advance. Fortify everything. Wait for the Noose to solve the problem.
+    Never advance. Fortify everything. Refuse to move toward the fight.
     This strategy SHOULD lose — if it wins, the game rewards passivity.
+    Pure passivity: stay at starting positions, fortify, and wait to die.
     """
     name = "turtle"
 
@@ -395,33 +500,60 @@ class TurtleStrategy(Strategy):
         for force in player.get_alive_forces():
             if _can_order(force, player, OrderType.FORTIFY):
                 orders.append(Order(OrderType.FORTIFY, force))
-            else:
-                moves = _valid_moves(force, game_state)
-                if moves:
-                    best = _move_toward(force, (3, 3), game_state)
-                    if best:
-                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+            # Never move — pure passivity. The Noose will handle the rest.
         return orders
 
 
 class NooseDodgerStrategy(Strategy):
     """
-    Move everything toward center. No special orders. The minimum viable strategy.
-    Tests whether the game reduces to "just walk to center."
+    Rush to center and hold contentious hexes with basic tactics.
+    Sovereign stays protected at back. Tests center-rush with sovereign protection.
     """
     name = "dodger"
 
     def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
-        powers = [1, 2, 3, 4, 5]
-        rng.shuffle(powers)
-        return {f.id: p for f, p in zip(player.forces, powers)}
+        ids = [f.id for f in player.forces]
+        powers = [3, 4, 1, 5, 2]  # Sovereign in middle, strong forces in front
+        return dict(zip(ids, powers))
 
     def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
         player = game_state.get_player_by_id(player_id)
         orders = []
         center = (3, 3)
+        contentious = _contentious_hexes(game_state)
+
         for force in player.get_alive_forces():
-            best = _move_toward(force, center, game_state)
+            enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
+            enemies_adjacent = [e for e in enemies_near
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
+
+            # Sovereign: stay back, flee if threatened
+            if force.is_sovereign:
+                if enemies_adjacent:
+                    nearest = min(enemies_adjacent, key=lambda e: hex_distance(
+                        force.position[0], force.position[1], e.position[0], e.position[1]))
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        best = max(moves, key=lambda m: hex_distance(
+                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                elif enemies_near and _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                # Otherwise stay put
+                continue
+
+            on_contentious = any(force.position == c for c in contentious)
+
+            # On contentious hex with enemies near: fortify to hold it
+            if on_contentious and enemies_near and _can_order(force, player, OrderType.FORTIFY):
+                orders.append(Order(OrderType.FORTIFY, force))
+                continue
+
+            # Move toward nearest contentious hex or center
+            target = min(contentious, key=lambda c: hex_distance(
+                force.position[0], force.position[1], c[0], c[1])) if contentious else center
+            best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
         return orders
@@ -429,8 +561,9 @@ class NooseDodgerStrategy(Strategy):
 
 class CoordinatorStrategy(Strategy):
     """
-    Keep forces in formation for support bonus. Advance together toward objectives.
-    Exploits the support mechanic by choosing moves that maintain adjacency.
+    Keep forces in formation for support bonus. Attack when supported.
+    Exploits the support mechanic by maintaining adjacency and striking together.
+    Supported forces (2+ adjacent friendlies) attack aggressively.
     """
     name = "coordinator"
 
@@ -445,31 +578,53 @@ class CoordinatorStrategy(Strategy):
         contentious = _contentious_hexes(game_state)
         center = (3, 3)
         alive = player.get_alive_forces()
-        handled = set()
 
         for force in alive:
-            if force.id in handled:
-                continue
             enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
-
-            # Count adjacent friendlies
+            enemies_adjacent = [e for e in enemies_near
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
             adj_friends = sum(1 for f in alive if f.id != force.id
                             and is_adjacent(f.position, force.position))
-
-            # On contentious with support? Hold position.
             on_contentious = any(force.position == c for c in contentious)
+
+            # Sovereign: stay with formation, fortify when threatened
+            if force.is_sovereign:
+                if enemies_adjacent and _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                else:
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        scored = []
+                        for m in moves:
+                            dist = hex_distance(m[0], m[1], center[0], center[1])
+                            adj = sum(1 for f in alive if f.id != force.id
+                                     and hex_distance(f.position[0], f.position[1], m[0], m[1]) <= 1)
+                            scored.append((dist - adj * 2, m))
+                        scored.sort()
+                        orders.append(Order(OrderType.MOVE, force, target_hex=scored[0][1]))
+                continue
+
+            # Well-supported (2+ adj friends) and enemies near: attack!
+            if adj_friends >= 2 and enemies_near and force.power and force.power >= 3:
+                target_enemy = min(enemies_near, key=lambda e: hex_distance(
+                    force.position[0], force.position[1], e.position[0], e.position[1]))
+                dist = hex_distance(force.position[0], force.position[1],
+                                   target_enemy.position[0], target_enemy.position[1])
+                if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
+                    orders.append(Order(OrderType.CHARGE, force, target_hex=target_enemy.position))
+                    continue
+                best = _move_toward(force, target_enemy.position, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                    continue
+
+            # On contentious with support: hold position
             if on_contentious and adj_friends >= 1:
                 if enemies_near and _can_order(force, player, OrderType.AMBUSH):
                     orders.append(Order(OrderType.AMBUSH, force))
                 elif _can_order(force, player, OrderType.FORTIFY):
                     orders.append(Order(OrderType.FORTIFY, force))
-                else:
-                    # Stay put - no order needed, but must issue something
-                    moves = _valid_moves(force, game_state)
-                    if moves:
-                        orders.append(Order(OrderType.MOVE, force, target_hex=force.position
-                                          if game_state.is_valid_position(force.position) else moves[0]))
-                handled.add(force.id)
                 continue
 
             # Move toward contentious hex, preferring adjacency to friendlies
@@ -485,7 +640,6 @@ class CoordinatorStrategy(Strategy):
                     scored.append((dist_to_target - adj_count, m))
                 scored.sort()
                 orders.append(Order(OrderType.MOVE, force, target_hex=scored[0][1]))
-            handled.add(force.id)
 
         return orders
 
@@ -520,6 +674,24 @@ class SovereignHunterStrategy(Strategy):
 
         for force in player.get_alive_forces():
             enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
+            enemies_adjacent = [e for e in enemies_near
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
+
+            # Sovereign: stay at back, flee if threatened
+            if force.is_sovereign:
+                if enemies_adjacent:
+                    nearest = min(enemies_adjacent, key=lambda e: hex_distance(
+                        force.position[0], force.position[1], e.position[0], e.position[1]))
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        best = max(moves, key=lambda m: hex_distance(
+                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                elif enemies_near and _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                # Otherwise do nothing — stay put, save shih
+                continue
 
             # If we know where the sovereign is, send power-4 and power-5 to kill it
             if sovereign_pos and force.power and force.power >= 4:
@@ -535,9 +707,6 @@ class SovereignHunterStrategy(Strategy):
                     continue
 
             # Avoid known-stronger enemies
-            enemies_adjacent = [e for e in enemies_near
-                               if hex_distance(force.position[0], force.position[1],
-                                               e.position[0], e.position[1]) <= 1]
             avoided = False
             for enemy in enemies_adjacent:
                 if enemy.id in player.known_enemy_powers:
@@ -602,6 +771,24 @@ class BlitzerStrategy(Strategy):
 
         for force in player.get_alive_forces():
             enemies_near = _visible_enemies(force, player_id, game_state, max_range=2)
+            enemies_adjacent = [e for e in enemies_near
+                               if hex_distance(force.position[0], force.position[1],
+                                               e.position[0], e.position[1]) <= 1]
+
+            # Sovereign: stay at back, flee if threatened
+            if force.is_sovereign:
+                if enemies_adjacent:
+                    nearest = min(enemies_adjacent, key=lambda e: hex_distance(
+                        force.position[0], force.position[1], e.position[0], e.position[1]))
+                    moves = _valid_moves(force, game_state)
+                    if moves:
+                        best = max(moves, key=lambda m: hex_distance(
+                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                elif enemies_near and _can_order(force, player, OrderType.FORTIFY):
+                    orders.append(Order(OrderType.FORTIFY, force))
+                # Otherwise do nothing — stay put, save shih
+                continue
 
             # If we know sovereign location, charge our power-4/5 toward it
             if sovereign_pos and force.power and force.power >= 4:
@@ -691,19 +878,15 @@ def run_game(
         p1_orders = p1_strategy.plan('p1', game, rng)
         p2_orders = p2_strategy.plan('p2', game, rng)
 
-        # Track order usage
-        for o in p1_orders + p2_orders:
-            if o.order_type == OrderType.SCOUT:
-                record.scouts_used += 1
-            elif o.order_type == OrderType.AMBUSH:
-                record.ambushes_used += 1
-            elif o.order_type == OrderType.FORTIFY:
-                record.fortifies_used += 1
-            elif o.order_type == OrderType.CHARGE:
-                record.charges_used += 1
-
         game.phase = 'resolve'
         result = resolve_orders(p1_orders, p2_orders, game)
+
+        # Track actually-executed specials (from validated orders, not submitted)
+        counts = result.get('order_counts', {})
+        record.scouts_used += counts.get('scout', 0)
+        record.fortifies_used += counts.get('fortify', 0)
+        record.ambushes_used += counts.get('ambush', 0)
+        record.charges_used += counts.get('charge', 0)
         record.combats += len(result.get('combats', []))
 
         # Track retreats

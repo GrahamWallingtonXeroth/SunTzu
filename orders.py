@@ -270,6 +270,13 @@ def resolve_orders(
         except OrderValidationError as e:
             results['errors'].append({'player': pid, 'force': order.force.id, 'error': str(e)})
 
+    # Track executed order counts (after validation and shih deduction)
+    order_counts: Dict[str, int] = {}
+    for order, pid in valid_orders:
+        key = order.order_type.value.lower()
+        order_counts[key] = order_counts.get(key, 0) + 1
+    results['order_counts'] = order_counts
+
     # Phase 2: Apply Fortify
     for order, pid in valid_orders:
         if order.order_type == OrderType.FORTIFY:

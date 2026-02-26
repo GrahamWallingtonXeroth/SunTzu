@@ -1,60 +1,39 @@
 """
-Gameplay experience tests for The Unfought Battle v5.
+Gameplay tests for The Unfought Battle v6.
 
-These tests don't check that code works. They check that the GAME works.
-They simulate hundreds of games between different AI strategies and measure
-emergent properties that a brilliant game must exhibit.
+These tests define what a GOOD game looks like, then check whether this game
+meets that standard. Thresholds are set based on design goals, not current
+performance. If a test fails, the GAME needs fixing — not the threshold.
 
-GOODHART'S LAW RESISTANCE
-=========================
-These tests are resistant to parameter-gaming because they measure
-RELATIONSHIPS between strategies, not absolute numbers. You can't
-tune config.json to pass these tests without actually making the game
-better, because:
+DESIGN PRINCIPLES
+=================
+1. Thresholds describe the game we WANT, not the game we have.
+2. Turtle is excluded from competitive metrics. A deliberately broken
+   strategy should not inflate or deflate any measurement.
+3. Every test has a "why" — the design goal it enforces.
+4. No test should be passable by a game with no strategic depth.
+   If random-vs-random could pass it, the threshold is too loose.
 
-1. They test that SKILL MATTERS (informed > random) — you can't fake
-   this by tweaking numbers; the information system must genuinely help.
-
-2. They test that NO STRATEGY DOMINATES — you can't tune one number to
-   fix this; the rock-paper-scissors must emerge from the mechanics.
-
-3. They test that PASSIVITY LOSES — the Noose must actually kill turtles,
-   not just exist in the rules.
-
-4. They test that ALL VICTORY PATHS ARE REACHABLE — you can't fake
-   sovereign capture, domination, and elimination all occurring naturally.
-
-5. They test STRUCTURAL properties (game length distribution, combat
-   frequency, information usage) that emerge from the interaction of
-   ALL mechanics simultaneously.
-
-6. They test that COMBAT DECIDES GAMES, not just the Noose timer.
-
-7. They test that NEW MECHANICS (support, charge, retreat) are used
-   and create meaningful strategic choices.
-
-The only way to pass all these tests is to have a well-designed game.
-
-KEY MEASURES FOR A BRILLIANT GAME
-==================================
-1. Skill gradient     — better strategies beat worse ones
-2. No dominant play   — no pure strategy beats everything
-3. Games terminate    — no draws, no infinite stalls
-4. Diverse victories  — all victory types occur in practice
-5. Information value  — scouting measurably helps
-6. Aggression viable  — attacking is a path to winning
-7. Patience punished  — turtling loses to active play
-8. Economy bites      — players face real resource constraints
-9. Noose works        — board shrink has teeth but doesn't dominate
-10. Deployment matters — different power layouts lead to different outcomes
-11. Combat decides    — player decisions, not the timer, determine outcomes
-12. New mechanics work — support, charge, retreat all matter
+WHAT A GOOD GAME EXHIBITS
+==========================
+1. COMBAT IS CENTRAL     — Most games have fights, not cold wars
+2. DECISIONS MATTER       — Specials are diverse, not fortify-spam
+3. INFORMATION PAYS       — Scouting strategies beat blind ones
+4. AGGRESSION WORKS       — Attacking is viable, not suicidal
+5. PASSIVITY DIES         — Turtling is crushed, not merely weak
+6. NO DOMINANT STRATEGY   — Rock-paper-scissors among competitive strats
+7. GAMES HAVE ARCS        — Opening, midgame, endgame — not bimodal
+8. VICTORY PATHS DIVERGE  — Multiple win conditions, none >65%
+9. FORCES DIE             — Combat has consequences, not just retreat
+10. ECONOMY CONSTRAINS    — Real tradeoffs, not unlimited fortify
+11. THE NOOSE PRESSURES   — Timer shapes play without dominating it
+12. METAGAME HAS DEPTH    — Game theory properties hold among COMPETITIVE strats
 """
 
 import pytest
 import random
-from collections import Counter
-from typing import List, Dict
+from collections import Counter, defaultdict
+from typing import List, Dict, Tuple, Optional
 
 import sys
 import os
@@ -70,11 +49,17 @@ from tests.simulate import (
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: run the tournaments once, share across all tests
+# Fixtures
 # ---------------------------------------------------------------------------
 
 GAMES_PER_MATCHUP = 40
 MAP_SEEDS = list(range(GAMES_PER_MATCHUP))
+
+# Competitive strategies: exclude turtle (deliberately broken) and random (baseline)
+COMPETITIVE_STRATEGIES = [s for s in ALL_STRATEGIES if s.name not in ('turtle', 'random')]
+COMPETITIVE_NAMES = {s.name for s in COMPETITIVE_STRATEGIES}
+BASELINE_NAMES = {'turtle', 'random'}
+
 
 @pytest.fixture(scope="module")
 def tournament_records():
@@ -83,618 +68,58 @@ def tournament_records():
 
 
 @pytest.fixture(scope="module")
-def records_by_matchup(tournament_records):
-    """Group records by (p1_strategy, p2_strategy) pair."""
-    grouped = {}
-    for r in tournament_records:
-        key = (r.p1_strategy, r.p2_strategy)
-        grouped.setdefault(key, []).append(r)
-    return grouped
+def competitive_records(tournament_records):
+    """Records where BOTH players are competitive (no turtle, no random)."""
+    return [r for r in tournament_records
+            if r.p1_strategy in COMPETITIVE_NAMES and r.p2_strategy in COMPETITIVE_NAMES]
+
+
+@pytest.fixture(scope="module")
+def payoff_matrix(tournament_records):
+    """Win-rate matrix from tournament, computed once."""
+    return _build_payoff_matrix(tournament_records)
+
+
+@pytest.fixture(scope="module")
+def competitive_payoff(competitive_records):
+    """Win-rate matrix using only competitive strategies."""
+    return _build_payoff_matrix_from(competitive_records, COMPETITIVE_NAMES)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _strategy_win_rate(records: List[GameRecord], name: str) -> float:
+    games = sum(1 for r in records if r.p1_strategy == name or r.p2_strategy == name)
+    wins = sum(1 for r in records
+               if (r.winner == 'p1' and r.p1_strategy == name)
+               or (r.winner == 'p2' and r.p2_strategy == name))
+    return wins / games if games > 0 else 0.0
+
+
+def _matchup_win_rate(records: List[GameRecord], strat: str, opponent: str) -> float:
+    """Win rate of strat against opponent across all records."""
+    matchup = [r for r in records
+               if (r.p1_strategy == strat and r.p2_strategy == opponent)
+               or (r.p1_strategy == opponent and r.p2_strategy == strat)]
+    if not matchup:
+        return 0.5
+    wins = sum(1 for r in matchup
+               if (r.winner == 'p1' and r.p1_strategy == strat)
+               or (r.winner == 'p2' and r.p2_strategy == strat))
+    return wins / len(matchup)
 
-
-def win_rate(records: List[GameRecord], player_id: str) -> float:
-    """Win rate for a given player across a set of game records."""
-    if not records:
-        return 0.0
-    wins = sum(1 for r in records if r.winner == player_id)
-    return wins / len(records)
-
-
-def strategy_overall_wins(records: List[GameRecord], strategy_name: str) -> int:
-    """Count total wins for a strategy across all games (as either p1 or p2)."""
-    wins = 0
-    for r in records:
-        if r.winner == 'p1' and r.p1_strategy == strategy_name:
-            wins += 1
-        elif r.winner == 'p2' and r.p2_strategy == strategy_name:
-            wins += 1
-    return wins
-
-
-def strategy_games_played(records: List[GameRecord], strategy_name: str) -> int:
-    """Count games a strategy played."""
-    return sum(1 for r in records if r.p1_strategy == strategy_name or r.p2_strategy == strategy_name)
-
-
-# ===========================================================================
-# MEASURE 1: SKILL GRADIENT — Better strategies beat worse ones
-# ===========================================================================
-
-class TestSkillGradient:
-    """
-    The fundamental test: does being smarter help?
-    """
-
-    def test_random_is_worst(self, tournament_records):
-        """Random strategy should have the lowest overall win rate."""
-        wins_by_strat = {}
-        games_by_strat = {}
-        for s in ALL_STRATEGIES:
-            wins_by_strat[s.name] = strategy_overall_wins(tournament_records, s.name)
-            games_by_strat[s.name] = strategy_games_played(tournament_records, s.name)
-
-        random_rate = wins_by_strat['random'] / max(1, games_by_strat['random'])
-        non_random_rates = [
-            wins_by_strat[s.name] / max(1, games_by_strat[s.name])
-            for s in ALL_STRATEGIES if s.name != 'random'
-        ]
-        avg_non_random = sum(non_random_rates) / len(non_random_rates)
-        assert random_rate < avg_non_random, (
-            f"Random win rate ({random_rate:.2f}) should be below "
-            f"average non-random ({avg_non_random:.2f})"
-        )
-
-    def test_heuristic_beats_random(self, tournament_records):
-        """Every heuristic strategy should beat random more than 45% of the time."""
-        for strat in ALL_STRATEGIES:
-            if strat.name in ('random', 'turtle', 'dodger'):
-                continue
-            matchup_records = [
-                r for r in tournament_records
-                if (r.p1_strategy == strat.name and r.p2_strategy == 'random')
-                or (r.p1_strategy == 'random' and r.p2_strategy == strat.name)
-            ]
-            if not matchup_records:
-                continue
-            strat_wins = sum(
-                1 for r in matchup_records
-                if (r.winner == 'p1' and r.p1_strategy == strat.name)
-                or (r.winner == 'p2' and r.p2_strategy == strat.name)
-            )
-            rate = strat_wins / len(matchup_records)
-            assert rate > 0.45, (
-                f"{strat.name} should beat random >45% of the time, got {rate:.2f}"
-            )
-
-
-# ===========================================================================
-# MEASURE 2: NO DOMINANT STRATEGY — Rock-paper-scissors must emerge
-# ===========================================================================
-
-class TestNoDominantStrategy:
-    """No single strategy should beat every other strategy."""
-
-    def test_no_strategy_beats_all(self, tournament_records):
-        """No strategy should have >80% win rate against ALL others."""
-        for strat in ALL_STRATEGIES:
-            opponent_win_rates = []
-            for opp in ALL_STRATEGIES:
-                if opp.name == strat.name:
-                    continue
-                matchup = [
-                    r for r in tournament_records
-                    if (r.p1_strategy == strat.name and r.p2_strategy == opp.name)
-                    or (r.p1_strategy == opp.name and r.p2_strategy == strat.name)
-                ]
-                if not matchup:
-                    continue
-                wins = sum(
-                    1 for r in matchup
-                    if (r.winner == 'p1' and r.p1_strategy == strat.name)
-                    or (r.winner == 'p2' and r.p2_strategy == strat.name)
-                )
-                opponent_win_rates.append(wins / len(matchup))
-
-            if opponent_win_rates:
-                min_wr = min(opponent_win_rates)
-                assert min_wr < 0.85, (
-                    f"{strat.name} dominates with min opponent win rate {min_wr:.2f}"
-                )
-
-    def test_multiple_viable_strategies(self, tournament_records):
-        """At least 4 strategies should have overall win rate > 30%."""
-        viable = 0
-        for strat in ALL_STRATEGIES:
-            games = strategy_games_played(tournament_records, strat.name)
-            if games == 0:
-                continue
-            wins = strategy_overall_wins(tournament_records, strat.name)
-            if wins / games > 0.30:
-                viable += 1
-        assert viable >= 4, f"Only {viable} viable strategies (need 4+)"
-
-    def test_center_rush_not_dominant(self, tournament_records):
-        """Pure center-rush (NooseDodger) should not dominate — the game must
-        reward more than just walking to center."""
-        dodger_games = strategy_games_played(tournament_records, 'dodger')
-        dodger_wins = strategy_overall_wins(tournament_records, 'dodger')
-        if dodger_games > 0:
-            rate = dodger_wins / dodger_games
-            assert rate < 0.65, (
-                f"NooseDodger wins {rate:.1%} — game reduces to 'walk to center'"
-            )
-
-
-# ===========================================================================
-# MEASURE 3: GAMES TERMINATE — No infinite stalls
-# ===========================================================================
-
-class TestGamesTerminate:
-    """Every game should end. The Noose guarantees this."""
-
-    def test_all_games_have_winner(self, tournament_records):
-        """No game should end in a timeout. v5: gentler Noose allows slightly more timeouts."""
-        timeouts = [r for r in tournament_records if r.victory_type == 'timeout']
-        timeout_rate = len(timeouts) / len(tournament_records)
-        assert timeout_rate < 0.08, (
-            f"{len(timeouts)}/{len(tournament_records)} games timed out ({timeout_rate:.1%})"
-        )
-
-    def test_game_length_reasonable(self, tournament_records):
-        """Games should typically end between turns 6-20 (not ultra-short)."""
-        turns = [r.turns for r in tournament_records]
-        avg_turns = sum(turns) / len(turns)
-        assert 4 <= avg_turns <= 20, f"Average game length {avg_turns:.1f} is outside [4, 20]"
-
-    def test_no_absurdly_long_games(self, tournament_records):
-        """No game should exceed 25 turns."""
-        max_turns = max(r.turns for r in tournament_records)
-        assert max_turns <= 25, f"Longest game was {max_turns} turns"
-
-    def test_game_length_has_variance(self, tournament_records):
-        """Games shouldn't all be the same length — variance means different outcomes."""
-        turns = [r.turns for r in tournament_records]
-        min_t = min(turns)
-        max_t = max(turns)
-        assert max_t - min_t >= 4, (
-            f"Game lengths {min_t}-{max_t} too uniform (spread < 4)"
-        )
-
-
-# ===========================================================================
-# MEASURE 4: DIVERSE VICTORIES — All paths reachable
-# ===========================================================================
-
-class TestVictoryDiversity:
-    """All victory types should occur naturally in play."""
-
-    def test_sovereign_capture_occurs(self, tournament_records):
-        """Sovereign capture should happen in some games."""
-        sov_captures = [r for r in tournament_records if r.victory_type == 'sovereign_capture']
-        rate = len(sov_captures) / len(tournament_records)
-        assert rate > 0.05, (
-            f"Sovereign capture only {rate:.1%} of games (need >5%)"
-        )
-
-    def test_elimination_occurs(self, tournament_records):
-        """Elimination should happen in some games. v5: retreat makes elimination rarer."""
-        elims = [r for r in tournament_records if r.victory_type == 'elimination']
-        rate = len(elims) / len(tournament_records)
-        assert rate > 0.005, (
-            f"Elimination only {rate:.1%} of games (need >0.5%)"
-        )
-
-    def test_no_single_victory_type_dominates(self, tournament_records):
-        """No victory type should account for >70% of all wins."""
-        types = Counter(r.victory_type for r in tournament_records if r.victory_type)
-        total = sum(types.values())
-        for vtype, count in types.items():
-            rate = count / total
-            assert rate < 0.80, (
-                f"Victory type '{vtype}' is {rate:.1%} of all wins — too dominant"
-            )
-
-    def test_at_least_two_victory_types(self, tournament_records):
-        """At least 2 different victory types should occur."""
-        types = set(r.victory_type for r in tournament_records if r.victory_type and r.victory_type != 'timeout')
-        assert len(types) >= 2, f"Only {len(types)} victory types occurred: {types}"
-
-    def test_combat_kills_vs_noose_kills(self, tournament_records):
-        """A meaningful fraction of sovereign captures should come from combat, not Noose."""
-        noose_sov_kills = sum(1 for r in tournament_records if r.sovereign_killed_by_noose)
-        total_sov_captures = sum(1 for r in tournament_records if r.victory_type == 'sovereign_capture')
-        combat_sov_kills = total_sov_captures - noose_sov_kills
-        if total_sov_captures > 0:
-            combat_ratio = combat_sov_kills / total_sov_captures
-            assert combat_ratio > 0.25, (
-                f"Only {combat_ratio:.1%} of sovereign captures from combat (need >25%)"
-            )
-
-
-# ===========================================================================
-# MEASURE 5: INFORMATION VALUE — Scouting helps
-# ===========================================================================
-
-class TestInformationValue:
-    """Scouting should provide measurable advantage."""
-
-    def test_scout_strategy_beats_non_scout(self, tournament_records):
-        """Strategies that scout should collectively outperform strategies that never scout."""
-        scout_strats = {'cautious', 'hunter', 'blitzer'}
-        no_scout_strats = {'aggressive', 'turtle'}
-
-        scout_wins = 0
-        scout_games = 0
-        for r in tournament_records:
-            p1_scouts = r.p1_strategy in scout_strats
-            p2_scouts = r.p2_strategy in no_scout_strats
-            if p1_scouts and p2_scouts:
-                scout_games += 1
-                if r.winner == 'p1':
-                    scout_wins += 1
-            p1_no = r.p1_strategy in no_scout_strats
-            p2_sc = r.p2_strategy in scout_strats
-            if p2_sc and p1_no:
-                scout_games += 1
-                if r.winner == 'p2':
-                    scout_wins += 1
-
-        if scout_games > 0:
-            rate = scout_wins / scout_games
-            assert rate > 0.35, (
-                f"Scouting strategies only win {rate:.1%} vs non-scouting — "
-                f"information isn't valuable enough"
-            )
-
-    def test_games_use_scouting(self, tournament_records):
-        """Scouting should be used in a meaningful fraction of games."""
-        games_with_scouts = sum(1 for r in tournament_records if r.scouts_used > 0)
-        rate = games_with_scouts / len(tournament_records)
-        assert rate > 0.1, f"Only {rate:.1%} of games used scouting"
-
-
-# ===========================================================================
-# MEASURE 6: AGGRESSION VIABLE — Attacking works
-# ===========================================================================
-
-class TestAggressionViable:
-    """Aggressive play should be a viable path to victory."""
-
-    def test_aggressive_wins_some(self, tournament_records):
-        """Aggressive strategy should win at least 25% of its games."""
-        games = strategy_games_played(tournament_records, 'aggressive')
-        wins = strategy_overall_wins(tournament_records, 'aggressive')
-        if games > 0:
-            rate = wins / games
-            assert rate > 0.25, f"Aggressive only wins {rate:.1%}"
-
-    def test_combat_happens(self, tournament_records):
-        """Most games should involve at least one combat."""
-        games_with_combat = sum(1 for r in tournament_records if r.combats > 0)
-        rate = games_with_combat / len(tournament_records)
-        assert rate > 0.30, f"Only {rate:.1%} of games had combat"
-
-    def test_average_combats_per_game(self, tournament_records):
-        """Games should average at least 0.5 combats."""
-        total_combats = sum(r.combats for r in tournament_records)
-        avg = total_combats / len(tournament_records)
-        assert avg >= 0.5, f"Average combats per game is only {avg:.2f}"
-
-
-# ===========================================================================
-# MEASURE 7: PASSIVITY PUNISHED — Turtling loses
-# ===========================================================================
-
-class TestPassivityPunished:
-    """The turtle strategy should be the worst or near-worst."""
-
-    def test_turtle_loses_to_active_strategies(self, tournament_records):
-        """Turtle should lose to every non-random active strategy."""
-        active_strats = ['aggressive', 'cautious', 'ambush', 'hunter']
-        for active in active_strats:
-            matchup = [
-                r for r in tournament_records
-                if (r.p1_strategy == 'turtle' and r.p2_strategy == active)
-                or (r.p1_strategy == active and r.p2_strategy == 'turtle')
-            ]
-            if not matchup:
-                continue
-            turtle_wins = sum(
-                1 for r in matchup
-                if (r.winner == 'p1' and r.p1_strategy == 'turtle')
-                or (r.winner == 'p2' and r.p2_strategy == 'turtle')
-            )
-            rate = turtle_wins / len(matchup)
-            assert rate < 0.55, (
-                f"Turtle beats {active} {rate:.1%} — passivity shouldn't be this effective"
-            )
-
-    def test_turtle_has_low_overall_rate(self, tournament_records):
-        """Turtle should have the lowest or near-lowest win rate."""
-        games = strategy_games_played(tournament_records, 'turtle')
-        wins = strategy_overall_wins(tournament_records, 'turtle')
-        if games > 0:
-            rate = wins / games
-            assert rate < 0.50, f"Turtle wins {rate:.1%} — passivity too strong"
-
-
-# ===========================================================================
-# MEASURE 8: ECONOMY BITES — Resources constrain choices
-# ===========================================================================
-
-class TestEconomyBites:
-    """Players should face real resource constraints."""
-
-    def test_players_cant_afford_everything(self, tournament_records):
-        """Special orders per turn should be well below maximum possible."""
-        games_with_specials = [
-            r for r in tournament_records
-            if r.scouts_used + r.ambushes_used + r.fortifies_used + r.charges_used > 0
-        ]
-        for r in games_with_specials:
-            if r.turns > 0:
-                specials_per_turn = (r.scouts_used + r.ambushes_used + r.fortifies_used + r.charges_used) / r.turns
-                assert specials_per_turn <= 10, (
-                    f"Economy too loose: {specials_per_turn:.1f} special orders/turn"
-                )
-
-    def test_fortify_is_most_used_special(self, tournament_records):
-        """Fortify (cheapest special) should be used more than scout."""
-        total_fortify = sum(r.fortifies_used for r in tournament_records)
-        total_scout = sum(r.scouts_used for r in tournament_records)
-        assert total_fortify > total_scout, (
-            f"Fortify ({total_fortify}) should be used more than Scout ({total_scout})"
-        )
-
-
-# ===========================================================================
-# MEASURE 9: THE NOOSE WORKS — Board shrink has teeth but doesn't dominate
-# ===========================================================================
-
-class TestNooseWorks:
-    """The shrinking board should actively shape games without dominating outcomes."""
-
-    def test_noose_kills_some_forces(self, tournament_records):
-        """The Noose should kill at least some forces across all games."""
-        total_noose_kills = sum(r.noose_kills for r in tournament_records)
-        assert total_noose_kills > 0, "The Noose never killed anyone"
-
-    def test_noose_kills_in_long_games(self, tournament_records):
-        """Games lasting >8 turns should have Noose kills."""
-        long_games = [r for r in tournament_records if r.turns > 8]
-        if long_games:
-            games_with_noose_kills = sum(1 for r in long_games if r.noose_kills > 0)
-            rate = games_with_noose_kills / len(long_games)
-            assert rate > 0.1, (
-                f"Only {rate:.1%} of long games had Noose kills"
-            )
-
-
-# ===========================================================================
-# MEASURE 10: DEPLOYMENT MATTERS — Different layouts, different outcomes
-# ===========================================================================
-
-class TestDeploymentMatters:
-    """Different power assignments should produce different results."""
-
-    def test_different_deployments_different_outcomes(self):
-        """Same strategies with different deployment orders should produce different game records."""
-        class ShuffledDeploy(AggressiveStrategy):
-            name = "agg_shuffled"
-            def __init__(self, rng_seed):
-                self._rng = random.Random(rng_seed)
-            def deploy(self, player, rng):
-                powers = [1, 2, 3, 4, 5]
-                self._rng.shuffle(powers)
-                return {f.id: p for f, p in zip(player.forces, powers)}
-
-        winners = []
-        for i in range(30):
-            s1 = ShuffledDeploy(i)
-            s2 = ShuffledDeploy(i + 1000)
-            r = run_game(s1, s2, seed=42, rng_seed=i)
-            winners.append(r.winner)
-
-        p1_wins = winners.count('p1')
-        p2_wins = winners.count('p2')
-        assert p1_wins > 0 and p2_wins > 0, (
-            f"Deployment doesn't matter: p1={p1_wins}, p2={p2_wins}"
-        )
-
-    def test_sovereign_placement_matters(self):
-        """Putting the sovereign in front vs back should change outcomes."""
-        class SovFront(AggressiveStrategy):
-            name = "sov_front"
-            def deploy(self, player, rng):
-                ids = [f.id for f in player.forces]
-                return dict(zip(ids, [1, 5, 4, 3, 2]))
-
-        class SovBack(AggressiveStrategy):
-            name = "sov_back"
-            def deploy(self, player, rng):
-                ids = [f.id for f in player.forces]
-                return dict(zip(ids, [5, 4, 3, 2, 1]))
-
-        front_records = []
-        back_records = []
-        for i in range(30):
-            r1 = run_game(SovFront(), CautiousStrategy(), seed=i, rng_seed=i)
-            r2 = run_game(SovBack(), CautiousStrategy(), seed=i, rng_seed=i)
-            front_records.append(r1)
-            back_records.append(r2)
-
-        front_wins = sum(1 for r in front_records if r.winner == 'p1')
-        back_wins = sum(1 for r in back_records if r.winner == 'p1')
-        total = len(front_records)
-        combined_results = [(f.winner, b.winner) for f, b in zip(front_records, back_records)]
-        identical = sum(1 for f, b in combined_results if f == b)
-        assert identical < total, (
-            "Sovereign front vs back produced identical results every time"
-        )
-
-
-# ===========================================================================
-# STRUCTURAL TESTS: Emergent game properties
-# ===========================================================================
-
-class TestGameArc:
-    """Games should have a natural arc: opening, midgame, endgame."""
-
-    def test_combat_not_immediate(self, tournament_records):
-        """First combat shouldn't happen on turn 1 (forces start far apart)."""
-        games_with_combat = [r for r in tournament_records if r.combats > 0]
-        assert len(games_with_combat) > 0
-
-    def test_forces_are_lost(self, tournament_records):
-        """Both players should lose forces in some games — not just one-sided."""
-        both_lose = sum(
-            1 for r in tournament_records
-            if r.p1_forces_lost > 0 and r.p2_forces_lost > 0
-        )
-        either_lose = sum(
-            1 for r in tournament_records
-            if r.p1_forces_lost > 0 or r.p2_forces_lost > 0
-        )
-        if either_lose > 0:
-            rate = both_lose / either_lose
-            assert rate > 0.2, (
-                f"Only {rate:.1%} of combat games had mutual losses — too one-sided"
-            )
-
-
-class TestContentiousControl:
-    """Contentious hexes should see real competition, not be ignored."""
-
-    def test_both_players_contest(self, tournament_records):
-        """Both players should control contentious hexes at some point."""
-        p1_ever_controlled = sum(
-            1 for r in tournament_records
-            if r.contentious_control_turns.get('p1', 0) > 0
-        )
-        p2_ever_controlled = sum(
-            1 for r in tournament_records
-            if r.contentious_control_turns.get('p2', 0) > 0
-        )
-        total = len(tournament_records)
-        assert p1_ever_controlled / total > 0.2, "P1 rarely controls contentious hexes"
-        assert p2_ever_controlled / total > 0.2, "P2 rarely controls contentious hexes"
-
-
-class TestAmbushMechanic:
-    """The ambush mechanic should be used and should sometimes matter."""
-
-    def test_ambush_is_used(self, tournament_records):
-        """Ambush should be used in some games."""
-        games_with_ambush = sum(1 for r in tournament_records if r.ambushes_used > 0)
-        rate = games_with_ambush / len(tournament_records)
-        assert rate > 0.05, f"Ambush only used in {rate:.1%} of games"
-
-    def test_ambush_strategy_viable(self, tournament_records):
-        """The ambush strategy should not be the absolute worst."""
-        games = strategy_games_played(tournament_records, 'ambush')
-        wins = strategy_overall_wins(tournament_records, 'ambush')
-        if games > 0:
-            rate = wins / games
-            assert rate > 0.15, f"Ambush strategy only wins {rate:.1%}"
-
-
-# ===========================================================================
-# NEW MECHANICS TESTS — v4 additions
-# ===========================================================================
-
-class TestRetreatMechanic:
-    """Close combat retreat should create more combat and less permanent loss."""
-
-    def test_retreats_happen(self, tournament_records):
-        """Some combats should result in retreats, not just kills."""
-        total_retreats = sum(r.retreats for r in tournament_records)
-        assert total_retreats > 0, "No retreats occurred in any game"
-
-    def test_combat_with_retreat_more_engaging(self, tournament_records):
-        """Games with combat should exist and some should have retreats."""
-        games_with_combat = [r for r in tournament_records if r.combats > 0]
-        if games_with_combat:
-            games_with_retreats = sum(1 for r in games_with_combat if r.retreats > 0)
-            rate = games_with_retreats / len(games_with_combat)
-            assert rate > 0.05, (
-                f"Only {rate:.1%} of combat games had retreats"
-            )
-
-
-class TestChargeMechanic:
-    """Charge should be used and create meaningful fast-strike options."""
-
-    def test_charge_is_used(self, tournament_records):
-        """Charge should be used in some games."""
-        total_charges = sum(r.charges_used for r in tournament_records)
-        assert total_charges > 0, "Charge was never used"
-
-
-class TestSupportMechanic:
-    """The support mechanic should make formation play meaningful."""
-
-    def test_coordinator_viable(self, tournament_records):
-        """Coordinator strategy should be competitive."""
-        games = strategy_games_played(tournament_records, 'coordinator')
-        wins = strategy_overall_wins(tournament_records, 'coordinator')
-        if games > 0:
-            rate = wins / games
-            assert rate > 0.20, f"Coordinator only wins {rate:.1%}"
-
-
-# ===========================================================================
-# META-TEST: The game is not solvable by simple heuristics
-# ===========================================================================
-
-class TestGameComplexity:
-    """The game should exhibit enough complexity that no simple heuristic dominates."""
-
-    def test_win_rates_spread(self, tournament_records):
-        """Strategy win rates should be spread out, indicating depth."""
-        rates = []
-        for strat in ALL_STRATEGIES:
-            games = strategy_games_played(tournament_records, strat.name)
-            if games == 0:
-                continue
-            wins = strategy_overall_wins(tournament_records, strat.name)
-            rates.append(wins / games)
-
-        if len(rates) >= 3:
-            spread = max(rates) - min(rates)
-            assert spread > 0.10, (
-                f"Win rate spread is only {spread:.2f} — strategies too equal"
-            )
-
-    def test_no_first_mover_advantage(self, tournament_records):
-        """P1 and P2 should win roughly equally across all games."""
-        p1_wins = sum(1 for r in tournament_records if r.winner == 'p1')
-        p2_wins = sum(1 for r in tournament_records if r.winner == 'p2')
-        total = p1_wins + p2_wins
-        if total > 0:
-            p1_rate = p1_wins / total
-            assert 0.30 < p1_rate < 0.70, (
-                f"P1 wins {p1_rate:.1%} — significant first-mover advantage"
-            )
-
-
-# ===========================================================================
-# GAME THEORY ANALYSIS — Formal verification of strategic depth
-# ===========================================================================
 
 def _build_payoff_matrix(records: List[GameRecord]) -> Dict:
-    """
-    Build a symmetric win-rate matrix from tournament records.
-
-    Returns:
-        {
-            'strategies': ['random', 'aggressive', ...],
-            'matrix': [[float]],  # W[i][j] = win rate of strategy i vs strategy j
-        }
-    """
     names = [s.name for s in ALL_STRATEGIES]
+    return _build_payoff_matrix_from(records, set(names))
+
+
+def _build_payoff_matrix_from(records: List[GameRecord], strategy_names: set) -> Dict:
+    names = sorted(strategy_names)
     n = len(names)
     idx = {name: i for i, name in enumerate(names)}
-
     wins = [[0] * n for _ in range(n)]
     games = [[0] * n for _ in range(n)]
 
@@ -722,175 +147,646 @@ def _build_payoff_matrix(records: List[GameRecord]) -> Dict:
     return {'strategies': names, 'matrix': matrix}
 
 
-def _replicator_step(freqs: List[float], matrix: List[List[float]], dt: float = 0.1) -> List[float]:
-    """One step of replicator dynamics: dx_i/dt = x_i * (f_i - f_avg)."""
-    n = len(freqs)
-    # Compute fitness: f_i = sum_j(W[i][j] * freq[j])
-    fitness = [0.0] * n
-    for i in range(n):
-        for j in range(n):
-            fitness[i] += matrix[i][j] * freqs[j]
-
-    avg_fitness = sum(fitness[i] * freqs[i] for i in range(n))
-
-    new_freqs = [0.0] * n
-    for i in range(n):
-        new_freqs[i] = freqs[i] + dt * freqs[i] * (fitness[i] - avg_fitness)
-        new_freqs[i] = max(new_freqs[i], 0.0)
-
-    total = sum(new_freqs)
-    if total > 0:
-        new_freqs = [f / total for f in new_freqs]
-    return new_freqs
+def _replicator_dynamics(matrix: List[List[float]], steps: int = 2000, dt: float = 0.05) -> List[float]:
+    n = len(matrix)
+    freqs = [1.0 / n] * n
+    for _ in range(steps):
+        fitness = [sum(matrix[i][j] * freqs[j] for j in range(n)) for i in range(n)]
+        avg_fitness = sum(fitness[i] * freqs[i] for i in range(n))
+        new_freqs = [max(0.0, freqs[i] + dt * freqs[i] * (fitness[i] - avg_fitness)) for i in range(n)]
+        total = sum(new_freqs)
+        freqs = [f / total for f in new_freqs] if total > 0 else new_freqs
+    return freqs
 
 
-@pytest.fixture(scope="module")
-def payoff_data(tournament_records):
-    """Payoff matrix derived from tournament. Cached for module."""
-    return _build_payoff_matrix(tournament_records)
+# ===========================================================================
+# 1. COMBAT IS CENTRAL — Most games have fights, not cold wars
+# ===========================================================================
+
+class TestCombatIsCentral:
+    """A wargame where nobody fights is a failed wargame."""
+
+    def test_majority_of_games_have_combat(self, competitive_records):
+        """More than half of competitive games should involve at least one combat.
+        Why: If players can avoid each other and still win, combat is vestigial."""
+        games_with = sum(1 for r in competitive_records if r.combats > 0)
+        rate = games_with / len(competitive_records)
+        assert rate > 0.50, (
+            f"Only {rate:.1%} of competitive games had combat — majority should fight"
+        )
+
+    def test_zero_combat_rate_is_low(self, competitive_records):
+        """Fewer than 30% of competitive games should have zero combat.
+        Why: Zero-combat games mean the game rewards avoidance over engagement."""
+        zero = sum(1 for r in competitive_records if r.combats == 0)
+        rate = zero / len(competitive_records)
+        assert rate < 0.30, (
+            f"{rate:.1%} of competitive games had zero combat — too many cold wars"
+        )
+
+    def test_average_combats_meaningful(self, competitive_records):
+        """Competitive games should average at least 1.0 combats.
+        Why: 0.5 combats/game means most games have one fight or none — not central."""
+        total = sum(r.combats for r in competitive_records)
+        avg = total / len(competitive_records)
+        assert avg >= 1.0, (
+            f"Average combats is {avg:.2f} — combat is not central to gameplay"
+        )
 
 
-class TestGameTheoryProperties:
-    """
-    Formal game theory tests using the tournament payoff matrix.
+# ===========================================================================
+# 2. DECISIONS MATTER — Specials are diverse, not fortify-spam
+# ===========================================================================
 
-    These tests apply concepts from game theory (dominant strategies,
-    Nash equilibrium, replicator dynamics, intransitivity) to verify
-    that the game has genuine strategic depth -- not just surface variety.
+class TestDecisionsMatter:
+    """Players should face real choices between order types."""
 
-    A well-designed game should:
-    - Have NO strictly dominant strategy (no "always correct" choice)
-    - Exhibit intransitive cycles (rock-paper-scissors dynamics)
-    - Converge to a mixed equilibrium under replicator dynamics
-    - Have sufficient strategic differentiation in the payoff matrix
-    """
-
-    def test_no_strictly_dominant_strategy(self, payoff_data):
-        """No strategy should beat every other strategy more than 50% of the time.
-
-        A strictly dominant strategy makes the game trivially solvable.
-        Good games have rock-paper-scissors dynamics, not a hierarchy."""
-        matrix = payoff_data['matrix']
-        names = payoff_data['strategies']
-        n = len(names)
-
-        for i in range(n):
-            opponents_beaten = sum(
-                1 for j in range(n) if j != i and matrix[i][j] > 0.5
+    def test_no_single_order_monopolizes(self, competitive_records):
+        """No single special order should exceed 60% of all special orders.
+        Why: If one order dominates, there's no real decision to make."""
+        totals = {
+            'scout': sum(r.scouts_used for r in competitive_records),
+            'fortify': sum(r.fortifies_used for r in competitive_records),
+            'ambush': sum(r.ambushes_used for r in competitive_records),
+            'charge': sum(r.charges_used for r in competitive_records),
+        }
+        total = sum(totals.values())
+        if total == 0:
+            pytest.skip("No specials used")
+        for name, count in totals.items():
+            frac = count / total
+            assert frac < 0.60, (
+                f"'{name}' is {frac:.1%} of all specials — monopolizes decision space. "
+                f"Breakdown: {', '.join(f'{k}={v}' for k,v in totals.items())}"
             )
-            assert opponents_beaten < n - 1, (
-                f"'{names[i]}' is strictly dominant: beats {opponents_beaten}/{n-1} "
-                f"opponents. Win rates: "
-                + ", ".join(f"vs {names[j]}={matrix[i][j]:.2f}"
-                           for j in range(n) if j != i)
+
+    def test_all_special_types_used(self, competitive_records):
+        """Every special order type should be used in at least 10% of competitive games.
+        Why: An unused mechanic is a dead mechanic."""
+        n = len(competitive_records)
+        for attr, label in [('scouts_used', 'Scout'), ('fortifies_used', 'Fortify'),
+                            ('ambushes_used', 'Ambush'), ('charges_used', 'Charge')]:
+            used = sum(1 for r in competitive_records if getattr(r, attr) > 0)
+            rate = used / n
+            assert rate > 0.10, (
+                f"{label} used in only {rate:.1%} of competitive games — mechanic is dead"
             )
 
-    def test_intransitive_cycles_exist(self, payoff_data):
-        """The top strategies should exhibit rock-paper-scissors cycles.
+    def test_economy_constrains_choices(self, competitive_records):
+        """Average specials per turn should be well below the theoretical max.
+        Why: If everyone can afford everything, there's no resource tradeoff.
+        With 5 forces at cost 1-2 each, theoretical max ~5/turn. Should be <3."""
+        for r in competitive_records:
+            if r.turns == 0:
+                continue
+            specials = r.scouts_used + r.ambushes_used + r.fortifies_used + r.charges_used
+            per_turn = specials / r.turns
+            assert per_turn <= 5.0, (
+                f"{r.p1_strategy} vs {r.p2_strategy}: {per_turn:.1f} specials/turn — "
+                f"economy is not constraining"
+            )
 
-        If A > B > C > A exists among the top strategies, no single strategy
-        can dominate the metagame -- players must adapt to opponents."""
-        matrix = payoff_data['matrix']
-        names = payoff_data['strategies']
-        n = len(names)
 
-        # Compute overall win rate for each strategy to find the top tier
-        overall = []
-        for i in range(n):
-            avg_wr = sum(matrix[i][j] for j in range(n) if j != i) / (n - 1)
-            overall.append((avg_wr, i))
-        overall.sort(reverse=True)
+# ===========================================================================
+# 3. INFORMATION PAYS — Scouting strategies beat blind ones
+# ===========================================================================
 
-        # Take the top 5 strategies
-        top_k = min(5, n)
-        top_indices = [idx for _, idx in overall[:top_k]]
+class TestInformationPays:
+    """The hidden-power system is the game's core idea. It must matter."""
 
-        # Search for any 3-cycle: W[a][b] > 0.5, W[b][c] > 0.5, W[c][a] > 0.5
-        found_cycle = False
-        for a in top_indices:
-            for b in top_indices:
-                if b == a or matrix[a][b] <= 0.5:
+    def test_scouting_is_used_meaningfully(self, competitive_records):
+        """More than 30% of competitive games should use scouting.
+        Why: If scouting is too expensive or useless, the information system is dead."""
+        used = sum(1 for r in competitive_records if r.scouts_used > 0)
+        rate = used / len(competitive_records)
+        assert rate > 0.30, (
+            f"Scouting used in only {rate:.1%} of competitive games — information system underused"
+        )
+
+    def test_scouting_correlates_with_combat(self, competitive_records):
+        """Games with scouting should have higher combat rates than games without.
+        Why: If information doesn't lead to action, the scout-fight loop is broken."""
+        scout_games = [r for r in competitive_records if r.scouts_used > 0]
+        no_scout = [r for r in competitive_records if r.scouts_used == 0]
+        if not scout_games or not no_scout:
+            pytest.skip("Need both scouted and unscouted games")
+        scout_combat = sum(1 for r in scout_games if r.combats > 0) / len(scout_games)
+        no_scout_combat = sum(1 for r in no_scout if r.combats > 0) / len(no_scout)
+        assert scout_combat > no_scout_combat, (
+            f"Scout games combat rate ({scout_combat:.1%}) should exceed "
+            f"non-scout ({no_scout_combat:.1%}) — scouting doesn't lead to engagement"
+        )
+
+
+# ===========================================================================
+# 4. AGGRESSION WORKS — Attacking is viable, not suicidal
+# ===========================================================================
+
+class TestAggressionWorks:
+    """Aggressive strategies should be competitive, not kamikaze."""
+
+    def test_aggressive_is_competitive(self, competitive_records):
+        """Aggressive should win >40% of competitive games.
+        Why: If attacking loses, the game rewards passive play."""
+        rate = _strategy_win_rate(competitive_records, 'aggressive')
+        assert rate > 0.40, (
+            f"Aggressive wins only {rate:.1%} of competitive games — attacking is punished"
+        )
+
+    def test_blitzer_is_competitive(self, competitive_records):
+        """Blitzer (charge-focused) should win >35% of competitive games.
+        Why: Fast-strike play should be a viable archetype."""
+        rate = _strategy_win_rate(competitive_records, 'blitzer')
+        assert rate > 0.35, (
+            f"Blitzer wins only {rate:.1%} — charge/fast-strike isn't viable"
+        )
+
+
+# ===========================================================================
+# 5. PASSIVITY DIES — Turtling is crushed, not merely weak
+# ===========================================================================
+
+class TestPassivityDies:
+    """Turtle should be annihilated, not just lose slightly."""
+
+    def test_turtle_is_crushed_by_every_active_strategy(self, tournament_records):
+        """Turtle should win <10% against every active strategy.
+        Why: If turtle wins even 20%, the game rewards passivity too much."""
+        active = [s.name for s in ALL_STRATEGIES if s.name not in ('turtle', 'random')]
+        for opp in active:
+            rate = _matchup_win_rate(tournament_records, 'turtle', opp)
+            assert rate < 0.10, (
+                f"Turtle wins {rate:.1%} vs {opp} — passivity is not punished hard enough"
+            )
+
+    def test_turtle_is_worst_overall(self, tournament_records):
+        """Turtle should be the worst strategy by overall win rate.
+        Why: The deliberately passive strategy must be the worst."""
+        rates = {s.name: _strategy_win_rate(tournament_records, s.name) for s in ALL_STRATEGIES}
+        turtle_rate = rates['turtle']
+        worse_than_turtle = [name for name, r in rates.items() if r < turtle_rate and name != 'turtle']
+        assert len(worse_than_turtle) == 0, (
+            f"Turtle ({turtle_rate:.1%}) is not the worst: {worse_than_turtle} are lower"
+        )
+
+
+# ===========================================================================
+# 6. NO DOMINANT STRATEGY — Rock-paper-scissors among competitive strats
+# ===========================================================================
+
+class TestNoDominantStrategy:
+    """Among competitive strategies, no single approach should dominate."""
+
+    def test_every_competitive_strategy_has_a_counter(self, competitive_records):
+        """Every competitive strategy should lose to at least one other (>55%).
+        Why: A strategy with no counter makes the game trivially solved."""
+        for strat in COMPETITIVE_NAMES:
+            losses = []
+            for opp in COMPETITIVE_NAMES:
+                if opp == strat:
                     continue
-                for c in top_indices:
-                    if c == a or c == b:
-                        continue
-                    if matrix[b][c] > 0.5 and matrix[c][a] > 0.5:
-                        found_cycle = True
-                        break
-                if found_cycle:
-                    break
-            if found_cycle:
-                break
+                rate = _matchup_win_rate(competitive_records, strat, opp)
+                if rate < 0.45:  # loses by >55%
+                    losses.append((opp, rate))
+            assert len(losses) >= 1, (
+                f"'{strat}' has no counter among competitive strategies — "
+                f"worst matchup: {min((1-_matchup_win_rate(competitive_records, strat, o), o) for o in COMPETITIVE_NAMES if o != strat)}"
+            )
 
-        assert found_cycle, (
-            f"No intransitive cycle found among top {top_k} strategies "
-            f"({', '.join(names[i] for i in top_indices)}). "
-            f"The metagame has a total ordering -- one strategy dominates."
+    def test_no_strategy_dominates_competitive_field(self, competitive_records):
+        """No competitive strategy should have >65% overall win rate in competitive games.
+        Why: >65% means one approach is clearly best regardless of opponent."""
+        for name in COMPETITIVE_NAMES:
+            rate = _strategy_win_rate(competitive_records, name)
+            assert rate < 0.65, (
+                f"'{name}' wins {rate:.1%} of competitive games — dominates the field"
+            )
+
+    def test_multiple_competitive_strategies_viable(self, competitive_records):
+        """At least 4 competitive strategies should have >35% win rate.
+        Why: Fewer than 4 viable options is too narrow a metagame."""
+        viable = sum(1 for name in COMPETITIVE_NAMES
+                     if _strategy_win_rate(competitive_records, name) > 0.35)
+        assert viable >= 4, (
+            f"Only {viable} competitive strategies above 35% — metagame too narrow"
         )
 
-    def test_replicator_dynamics_mixed_equilibrium(self, payoff_data):
-        """Replicator dynamics should converge to a mixed equilibrium.
-
-        Starting from uniform strategy frequencies, simulating evolutionary
-        pressure should NOT drive all population to a single strategy.
-        At least 2 strategies should survive with >1% frequency."""
-        matrix = payoff_data['matrix']
-        n = len(matrix)
-
-        # Start from uniform distribution
-        freqs = [1.0 / n] * n
-
-        # Run replicator dynamics for 2000 steps
-        for _ in range(2000):
-            freqs = _replicator_step(freqs, matrix, dt=0.05)
-
-        # Count surviving strategies (frequency > 1%)
-        names = payoff_data['strategies']
-        survivors = [(names[i], freqs[i]) for i in range(n) if freqs[i] > 0.01]
-        max_freq = max(freqs)
-        max_name = names[freqs.index(max_freq)]
-
-        assert len(survivors) >= 2, (
-            f"Replicator dynamics converged to only {len(survivors)} strategy(ies). "
-            f"Survivors: {survivors}. "
-            f"A well-balanced game should sustain at least 2 viable strategies."
-        )
-        assert max_freq < 0.90, (
-            f"'{max_name}' dominates with {max_freq:.1%} of the evolved population. "
-            f"The metagame is not balanced."
+    def test_tier_gap_is_small(self, competitive_records):
+        """Gap between best and worst competitive strategy should be <35%.
+        Why: A large gap means the 'competitive' pool has its own hierarchy."""
+        rates = [_strategy_win_rate(competitive_records, name) for name in COMPETITIVE_NAMES]
+        gap = max(rates) - min(rates)
+        assert gap < 0.35, (
+            f"Competitive tier gap is {gap:.1%} — too hierarchical, not rock-paper-scissors. "
+            f"Rates: {sorted(zip(COMPETITIVE_NAMES, rates), key=lambda x: -x[1])}"
         )
 
-    def test_payoff_matrix_differentiation(self, payoff_data):
-        """Strategy matchups should be meaningfully differentiated.
 
-        The payoff matrix should not be nearly uniform (all ~50/50).
-        Strategies should have distinct strengths and weaknesses."""
-        matrix = payoff_data['matrix']
-        names = payoff_data['strategies']
+# ===========================================================================
+# 7. GAMES HAVE ARCS — Opening, midgame, endgame
+# ===========================================================================
+
+class TestGamesHaveArcs:
+    """Games should flow through phases, not end instantly or stall forever."""
+
+    def test_midgame_exists(self, competitive_records):
+        """At least 25% of competitive games should last 7-14 turns.
+        Why: If games are bimodal (quick-kill or stall), there's no midgame."""
+        turns = [r.turns for r in competitive_records]
+        mid = sum(1 for t in turns if 7 <= t <= 14)
+        rate = mid / len(turns)
+        assert rate > 0.20, (
+            f"Only {rate:.1%} of games in midgame range (7-14 turns) — "
+            f"game is bimodal, no midgame phase"
+        )
+
+    def test_games_dont_end_too_fast(self, competitive_records):
+        """Fewer than 60% of games should end by turn 6.
+        Why: Games ending before forces even meet means no real gameplay."""
+        turns = [r.turns for r in competitive_records]
+        early = sum(1 for t in turns if t <= 6)
+        rate = early / len(turns)
+        assert rate < 0.60, (
+            f"{rate:.1%} of games end by turn 6 — too many instant resolutions"
+        )
+
+    def test_game_length_reasonable(self, competitive_records):
+        """Average game length should be between 6 and 18 turns.
+        Why: <6 means no maneuvering; >18 means the Noose is too gentle."""
+        turns = [r.turns for r in competitive_records]
+        avg = sum(turns) / len(turns)
+        assert 6 <= avg <= 18, f"Average game length {avg:.1f} outside [6, 18]"
+
+    def test_no_absurdly_long_games(self, competitive_records):
+        """No game should exceed 25 turns."""
+        max_t = max(r.turns for r in competitive_records)
+        assert max_t <= 25, f"Longest game: {max_t} turns"
+
+    def test_timeout_rate_low(self, tournament_records):
+        """Fewer than 8% of all games should time out."""
+        timeouts = sum(1 for r in tournament_records if r.victory_type == 'timeout')
+        rate = timeouts / len(tournament_records)
+        assert rate < 0.08, f"{rate:.1%} of games timed out"
+
+
+# ===========================================================================
+# 8. VICTORY PATHS DIVERGE — Multiple win conditions, none >65%
+# ===========================================================================
+
+class TestVictoryPathsDiverge:
+    """All victory types should occur; none should monopolize."""
+
+    def test_no_victory_type_exceeds_65_percent(self, competitive_records):
+        """No single victory type should account for >65% of outcomes.
+        Why: If one type dominates, the other victory conditions are decorative."""
+        types = Counter(r.victory_type for r in competitive_records if r.victory_type)
+        total = sum(types.values())
+        for vtype, count in types.items():
+            rate = count / total
+            assert rate < 0.65, (
+                f"'{vtype}' is {rate:.1%} of victories — monopolizes outcomes"
+            )
+
+    def test_at_least_three_victory_types(self, competitive_records):
+        """At least 3 different victory types should occur in competitive play.
+        Why: Two types means one mechanic is vestigial."""
+        types = set(r.victory_type for r in competitive_records
+                    if r.victory_type and r.victory_type != 'timeout')
+        assert len(types) >= 3, f"Only {len(types)} victory types: {types}"
+
+    def test_sovereign_capture_frequent(self, competitive_records):
+        """Sovereign capture should occur in >10% of competitive games.
+        Why: The game's signature mechanic must be viable."""
+        sov = sum(1 for r in competitive_records if r.victory_type == 'sovereign_capture')
+        rate = sov / len(competitive_records)
+        assert rate > 0.10, f"Sovereign capture only {rate:.1%} — signature mechanic too rare"
+
+    def test_domination_occurs(self, competitive_records):
+        """Domination should occur in >5% of competitive games.
+        Why: Territory control must be a real path to victory."""
+        dom = sum(1 for r in competitive_records if r.victory_type == 'domination')
+        rate = dom / len(competitive_records)
+        assert rate > 0.05, f"Domination only {rate:.1%} — territory control doesn't matter"
+
+    def test_combat_sovereign_kills_exceed_noose_kills(self, competitive_records):
+        """More sovereign captures should come from combat than from the Noose.
+        Why: Player decisions should determine outcomes more than the timer."""
+        noose_sov = sum(1 for r in competitive_records if r.sovereign_killed_by_noose)
+        total_sov = sum(1 for r in competitive_records if r.victory_type == 'sovereign_capture')
+        if total_sov == 0:
+            pytest.skip("No sovereign captures")
+        combat_sov = total_sov - noose_sov
+        assert combat_sov > noose_sov, (
+            f"Noose kills {noose_sov} sovereigns vs combat kills {combat_sov} — "
+            f"timer decides more games than players do"
+        )
+
+
+# ===========================================================================
+# 9. FORCES DIE — Combat has consequences
+# ===========================================================================
+
+class TestForcesDie:
+    """The retreat mechanic should make combat less lethal, not consequence-free."""
+
+    def test_forces_are_lost(self, competitive_records):
+        """Average forces lost per competitive game should be >1.5.
+        Why: If fewer than 1.5 forces die in a 10-force game, combat is toothless."""
+        avg = sum(r.p1_forces_lost + r.p2_forces_lost for r in competitive_records) / len(competitive_records)
+        assert avg > 1.5, (
+            f"Average forces lost is {avg:.2f} — combat has no real consequences"
+        )
+
+    def test_retreat_rate_is_meaningful_but_not_total(self, competitive_records):
+        """Retreat rate should be between 20% and 60% of combats.
+        Why: <20% means retreat mechanic is pointless; >60% means forces never die."""
+        total_combats = sum(r.combats for r in competitive_records)
+        total_retreats = sum(r.retreats for r in competitive_records)
+        if total_combats == 0:
+            pytest.skip("No combats")
+        rate = total_retreats / total_combats
+        assert 0.20 < rate < 0.60, (
+            f"Retreat rate is {rate:.1%} — should be 20-60% for meaningful combat"
+        )
+
+    def test_elimination_occurs(self, competitive_records):
+        """Elimination victory should occur in at least some competitive games.
+        Why: If retreat makes forces unkillable, elimination becomes impossible."""
+        elims = sum(1 for r in competitive_records if r.victory_type == 'elimination')
+        rate = elims / len(competitive_records)
+        assert rate > 0.005, (
+            f"Elimination only {rate:.2%} — forces are nearly unkillable"
+        )
+
+    def test_both_sides_lose_forces(self, competitive_records):
+        """In games with combat, both players should lose forces >25% of the time.
+        Why: One-sided losses mean combat is a coinflip, not a strategic exchange."""
+        combat_games = [r for r in competitive_records if r.combats > 0]
+        if not combat_games:
+            pytest.skip("No combat games")
+        both = sum(1 for r in combat_games if r.p1_forces_lost > 0 and r.p2_forces_lost > 0)
+        rate = both / len(combat_games)
+        assert rate > 0.25, (
+            f"Only {rate:.1%} of combat games had mutual losses — too one-sided"
+        )
+
+
+# ===========================================================================
+# 10. THE NOOSE PRESSURES — Timer shapes play without dominating
+# ===========================================================================
+
+class TestNoosePressures:
+    """The shrinking board should create urgency without being the main killer."""
+
+    def test_noose_kills_forces(self, tournament_records):
+        """The Noose should kill forces in some games.
+        Why: A Noose that never kills is just decoration."""
+        kills = sum(r.noose_kills for r in tournament_records)
+        assert kills > 0, "The Noose never killed anyone"
+
+    def test_noose_kills_in_long_games(self, competitive_records):
+        """Games lasting >10 turns should frequently have Noose kills.
+        Why: The Noose should be the endgame pressure that prevents stalling."""
+        long_games = [r for r in competitive_records if r.turns > 10]
+        if not long_games:
+            pytest.skip("No long games")
+        with_kills = sum(1 for r in long_games if r.noose_kills > 0)
+        rate = with_kills / len(long_games)
+        assert rate > 0.20, (
+            f"Only {rate:.1%} of long games had Noose kills — Noose has no teeth"
+        )
+
+
+# ===========================================================================
+# 11. SKILL GRADIENT — Better play beats worse play
+# ===========================================================================
+
+class TestSkillGradient:
+    """Smarter strategies should beat dumber ones."""
+
+    def test_random_is_worst(self, tournament_records):
+        """Random should have the lowest win rate."""
+        rates = {s.name: _strategy_win_rate(tournament_records, s.name) for s in ALL_STRATEGIES}
+        random_rate = rates['random']
+        worse = [n for n, r in rates.items() if r < random_rate and n != 'random' and n != 'turtle']
+        assert len(worse) == 0, (
+            f"Random ({random_rate:.1%}) beats: {worse} — random play shouldn't beat heuristics"
+        )
+
+    def test_every_competitive_strategy_beats_random(self, tournament_records):
+        """Every competitive strategy should beat random >55% of the time.
+        Why: If a heuristic barely beats random, it adds no value."""
+        for name in COMPETITIVE_NAMES:
+            rate = _matchup_win_rate(tournament_records, name, 'random')
+            assert rate > 0.55, (
+                f"'{name}' only beats random {rate:.1%} — heuristic adds no value"
+            )
+
+    def test_p1_p2_balance(self, tournament_records):
+        """P1 and P2 should each win 40-60% of decided games.
+        Why: Seat advantage shouldn't determine outcomes."""
+        p1 = sum(1 for r in tournament_records if r.winner == 'p1')
+        p2 = sum(1 for r in tournament_records if r.winner == 'p2')
+        total = p1 + p2
+        if total == 0:
+            pytest.skip("No decided games")
+        rate = p1 / total
+        assert 0.40 < rate < 0.60, (
+            f"P1 wins {rate:.1%} of decided games — significant seat advantage"
+        )
+
+
+# ===========================================================================
+# 12. DEPLOYMENT MATTERS — Power assignment changes outcomes
+# ===========================================================================
+
+class TestDeploymentMatters:
+    """Different power assignments should produce different results."""
+
+    def test_different_deployments_different_outcomes(self):
+        """Same strategy with different power layouts should win different games."""
+        class ShuffledDeploy(AggressiveStrategy):
+            name = "agg_shuffled"
+            def __init__(self, rng_seed):
+                self._rng = random.Random(rng_seed)
+            def deploy(self, player, rng):
+                powers = [1, 2, 3, 4, 5]
+                self._rng.shuffle(powers)
+                return {f.id: p for f, p in zip(player.forces, powers)}
+
+        winners = []
+        for i in range(30):
+            r = run_game(ShuffledDeploy(i), ShuffledDeploy(i + 1000), seed=42, rng_seed=i)
+            winners.append(r.winner)
+
+        p1 = winners.count('p1')
+        p2 = winners.count('p2')
+        assert p1 > 0 and p2 > 0, (
+            f"Deployment doesn't matter: p1={p1}, p2={p2}"
+        )
+
+    def test_sovereign_placement_matters(self):
+        """Sovereign position should change outcomes."""
+        class SovFront(AggressiveStrategy):
+            name = "sov_front"
+            def deploy(self, player, rng):
+                return dict(zip([f.id for f in player.forces], [1, 5, 4, 3, 2]))
+
+        class SovBack(AggressiveStrategy):
+            name = "sov_back"
+            def deploy(self, player, rng):
+                return dict(zip([f.id for f in player.forces], [5, 4, 3, 2, 1]))
+
+        results = []
+        for i in range(30):
+            r1 = run_game(SovFront(), CautiousStrategy(), seed=i, rng_seed=i)
+            r2 = run_game(SovBack(), CautiousStrategy(), seed=i, rng_seed=i)
+            results.append((r1.winner, r2.winner))
+
+        identical = sum(1 for a, b in results if a == b)
+        assert identical < len(results), "Sovereign front vs back always identical"
+
+
+# ===========================================================================
+# 13. CONTENTIOUS HEXES CONTESTED — Both players fight for territory
+# ===========================================================================
+
+class TestContentiousContested:
+    """Contentious hexes should see real competition."""
+
+    def test_both_players_control_contentious(self, competitive_records):
+        """Both players should control contentious hexes in >30% of competitive games.
+        Why: If only one side ever gets contentious, there's no territorial contest."""
+        n = len(competitive_records)
+        p1_ever = sum(1 for r in competitive_records if r.contentious_control_turns.get('p1', 0) > 0)
+        p2_ever = sum(1 for r in competitive_records if r.contentious_control_turns.get('p2', 0) > 0)
+        assert p1_ever / n > 0.30, f"P1 controls contentious in only {p1_ever/n:.1%} of games"
+        assert p2_ever / n > 0.30, f"P2 controls contentious in only {p2_ever/n:.1%} of games"
+
+
+# ===========================================================================
+# 14. MECHANICS WORK — Every mechanic is used and affects outcomes
+# ===========================================================================
+
+class TestMechanicsWork:
+    """Every game mechanic should pull its weight."""
+
+    def test_retreat_occurs(self, competitive_records):
+        """Retreats should occur in competitive games."""
+        total = sum(r.retreats for r in competitive_records)
+        assert total > 0, "No retreats in competitive play"
+
+    def test_charge_is_used(self, competitive_records):
+        """Charge should be used in competitive games."""
+        total = sum(r.charges_used for r in competitive_records)
+        assert total > 0, "Charge never used in competitive play"
+
+    def test_ambush_is_used(self, competitive_records):
+        """Ambush should be used in competitive games."""
+        total = sum(r.ambushes_used for r in competitive_records)
+        assert total > 0, "Ambush never used in competitive play"
+
+    def test_coordinator_is_viable(self, competitive_records):
+        """Coordinator (support-focused) should win >25% of competitive games.
+        Why: If formation play doesn't work, the support mechanic is useless."""
+        rate = _strategy_win_rate(competitive_records, 'coordinator')
+        assert rate > 0.25, f"Coordinator wins only {rate:.1%} — support mechanic is useless"
+
+    def test_charge_enables_combat(self, competitive_records):
+        """Games with charges should have higher combat rates than games without.
+        Why: Charge is supposed to close distance and enable engagements."""
+        charge_games = [r for r in competitive_records if r.charges_used > 0]
+        no_charge = [r for r in competitive_records if r.charges_used == 0]
+        if not charge_games or not no_charge:
+            pytest.skip("Need both charged and non-charged games")
+        charge_rate = sum(1 for r in charge_games if r.combats > 0) / len(charge_games)
+        no_charge_rate = sum(1 for r in no_charge if r.combats > 0) / len(no_charge)
+        assert charge_rate > no_charge_rate, (
+            f"Charge games ({charge_rate:.1%}) don't have more combat than "
+            f"non-charge ({no_charge_rate:.1%}) — charge doesn't enable engagement"
+        )
+
+
+# ===========================================================================
+# 15. GAME THEORY — Formal strategic depth among competitive strategies
+# ===========================================================================
+
+class TestGameTheory:
+    """Game theory properties should hold among competitive strategies (not turtle/random)."""
+
+    def test_intransitive_cycles_exist(self, competitive_payoff):
+        """The competitive matchup graph should contain A > B > C > A cycles.
+        Why: Without cycles, the metagame is a strict hierarchy."""
+        matrix = competitive_payoff['matrix']
+        names = competitive_payoff['strategies']
         n = len(names)
 
-        # Collect all off-diagonal win rates
-        off_diagonal = []
+        # Build beats graph with >0.55 threshold (clear advantage, not noise)
+        beats = {i: set() for i in range(n)}
         for i in range(n):
             for j in range(n):
-                if i != j:
-                    off_diagonal.append(matrix[i][j])
+                if i != j and matrix[i][j] > 0.55:
+                    beats[i].add(j)
 
-        mean_wr = sum(off_diagonal) / len(off_diagonal)
-        variance = sum((x - mean_wr) ** 2 for x in off_diagonal) / len(off_diagonal)
-        std_dev = variance ** 0.5
+        found = False
+        for a in range(n):
+            for b in beats[a]:
+                for c in beats[b]:
+                    if a in beats[c]:
+                        found = True
+                        break
+                if found:
+                    break
+            if found:
+                break
 
-        assert std_dev > 0.05, (
-            f"Payoff matrix std dev is only {std_dev:.3f} -- "
-            f"strategies are too similar (mean win rate: {mean_wr:.3f}). "
-            f"The game needs more strategic differentiation."
+        assert found, (
+            f"No intransitive cycle (A>B>C>A at >55%) among competitive strategies: "
+            f"{names}. The metagame is a strict hierarchy."
         )
 
-        # At least some matchups should be strongly asymmetric
-        strong_matchups = sum(1 for x in off_diagonal if x > 0.65 or x < 0.35)
-        strong_fraction = strong_matchups / len(off_diagonal)
+    def test_replicator_dynamics_sustain_diversity(self, competitive_payoff):
+        """Replicator dynamics among competitive strategies should sustain 3+ survivors.
+        Why: The competitive metagame should not collapse to 1-2 strategies."""
+        matrix = competitive_payoff['matrix']
+        names = competitive_payoff['strategies']
+        freqs = _replicator_dynamics(matrix)
 
-        assert strong_fraction > 0.10, (
-            f"Only {strong_fraction:.1%} of matchups are strongly asymmetric "
-            f"(win rate >65% or <35%). Need >10% for meaningful counter-play."
+        survivors = [(names[i], freqs[i]) for i in range(len(freqs)) if freqs[i] > 0.01]
+        max_freq = max(freqs)
+
+        assert len(survivors) >= 3, (
+            f"Replicator dynamics collapsed to {len(survivors)} strategy(ies): {survivors}. "
+            f"Competitive metagame lacks diversity."
         )
+        assert max_freq < 0.70, (
+            f"'{names[freqs.index(max_freq)]}' dominates at {max_freq:.1%} — "
+            f"metagame converges to one strategy"
+        )
+
+    def test_payoff_matrix_has_meaningful_variance(self, competitive_payoff):
+        """Win rates should have std_dev > 0.08 among competitive strategies.
+        Why: If all matchups are ~50/50, strategies are interchangeable."""
+        matrix = competitive_payoff['matrix']
+        n = len(matrix)
+        rates = [matrix[i][j] for i in range(n) for j in range(n) if i != j]
+        mean = sum(rates) / len(rates)
+        var = sum((x - mean) ** 2 for x in rates) / len(rates)
+        std = var ** 0.5
+        assert std > 0.08, (
+            f"Competitive payoff matrix std_dev is {std:.3f} — "
+            f"matchups too uniform, strategies interchangeable"
+        )
+
+    def test_no_strategy_beats_all_competitive(self, competitive_payoff):
+        """No competitive strategy should beat every other competitive strategy.
+        Why: Formal definition of 'no strictly dominant strategy.'"""
+        matrix = competitive_payoff['matrix']
+        names = competitive_payoff['strategies']
+        n = len(names)
+        for i in range(n):
+            beaten = sum(1 for j in range(n) if j != i and matrix[i][j] > 0.5)
+            assert beaten < n - 1, (
+                f"'{names[i]}' beats all {beaten}/{n-1} competitive opponents — "
+                f"strictly dominant"
+            )

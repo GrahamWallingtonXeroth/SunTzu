@@ -54,17 +54,17 @@ class TestOrderCosts:
     def test_move_is_free(self):
         assert ORDER_COSTS[OrderType.MOVE] == 0
 
-    def test_scout_costs_1(self):
-        assert ORDER_COSTS[OrderType.SCOUT] == 1
+    def test_scout_costs_2(self):
+        assert ORDER_COSTS[OrderType.SCOUT] == 2
 
-    def test_fortify_costs_1(self):
-        assert ORDER_COSTS[OrderType.FORTIFY] == 1
+    def test_fortify_costs_2(self):
+        assert ORDER_COSTS[OrderType.FORTIFY] == 2
 
-    def test_ambush_costs_2(self):
-        assert ORDER_COSTS[OrderType.AMBUSH] == 2
+    def test_ambush_costs_3(self):
+        assert ORDER_COSTS[OrderType.AMBUSH] == 3
 
-    def test_charge_costs_1(self):
-        assert ORDER_COSTS[OrderType.CHARGE] == 1
+    def test_charge_costs_2(self):
+        assert ORDER_COSTS[OrderType.CHARGE] == 2
 
 
 class TestMoveValidation:
@@ -214,7 +214,7 @@ class TestOrderResolution:
         old_shih = p1.shih
         p1_orders = [Order(OrderType.FORTIFY, force)]
         resolve_orders(p1_orders, [], game)
-        assert p1.shih == old_shih - 1
+        assert p1.shih == old_shih - 2
 
     def test_ambush_sets_flag(self, game):
         p1 = game.get_player_by_id('p1')
@@ -230,7 +230,7 @@ class TestOrderResolution:
         old_shih = p1.shih
         p1_orders = [Order(OrderType.AMBUSH, force)]
         resolve_orders(p1_orders, [], game)
-        assert p1.shih == old_shih - 2
+        assert p1.shih == old_shih - 3
 
     def test_move_into_enemy_triggers_combat(self, game):
         p1 = game.get_player_by_id('p1')
@@ -317,7 +317,7 @@ class TestOrderResolution:
         old_shih = p1.shih
         p1_orders = [Order(OrderType.CHARGE, force, target_hex=target)]
         resolve_orders(p1_orders, [], game)
-        assert p1.shih == old_shih - 1
+        assert p1.shih == old_shih - 2
 
 
 class TestChargeValidation:
