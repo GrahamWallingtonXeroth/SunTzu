@@ -1,8 +1,0 @@
-{
-    "starting_chi": 100,
-    "starting_shih": 10,
-    "max_shih": 20,
-    "force_count": 3,
-    "base_chi_loss": 8,
-    "tendency_modifier": 1
-  }

@@ -10,11 +10,11 @@ Computes per-game and aggregate metrics from telemetry data:
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
-from benchmark.telemetry import AgentReport, EventLog, GameTelemetry, BeliefState
+
+from benchmark.telemetry import AgentReport, GameTelemetry
 
 
-def brier_score(reports: List[AgentReport], ground_truth: Dict[str, int]) -> float:
+def brier_score(reports: list[AgentReport], ground_truth: dict[str, int]) -> float:
     """
     Compute Brier score for power beliefs.
 
@@ -49,8 +49,7 @@ def brier_score(reports: List[AgentReport], ground_truth: Dict[str, int]) -> flo
     return total_score / (n * 5)  # normalize by n beliefs * 5 power values
 
 
-def log_loss(reports: List[AgentReport], ground_truth: Dict[str, int],
-             epsilon: float = 1e-10) -> float:
+def log_loss(reports: list[AgentReport], ground_truth: dict[str, int], epsilon: float = 1e-10) -> float:
     """
     Compute log loss for power beliefs.
 
@@ -83,8 +82,7 @@ def log_loss(reports: List[AgentReport], ground_truth: Dict[str, int],
     return total / n
 
 
-def calibration_error(reports: List[AgentReport], ground_truth: Dict[str, int],
-                      n_bins: int = 5) -> float:
+def calibration_error(reports: list[AgentReport], ground_truth: dict[str, int], n_bins: int = 5) -> float:
     """
     Compute expected calibration error (ECE).
 
@@ -129,7 +127,7 @@ def calibration_error(reports: List[AgentReport], ground_truth: Dict[str, int],
     return total_error / total_samples
 
 
-def information_gain(reports: List[AgentReport]) -> List[float]:
+def information_gain(reports: list[AgentReport]) -> list[float]:
     """
     Compute information gain per turn: H_before - H_after.
 
@@ -147,7 +145,7 @@ def information_gain(reports: List[AgentReport]) -> List[float]:
     return gains
 
 
-def uncertainty_reduction(reports: List[AgentReport]) -> float:
+def uncertainty_reduction(reports: list[AgentReport]) -> float:
     """
     Compute overall uncertainty reduction: (H_turn1 - H_final) / H_turn1.
 
@@ -166,9 +164,9 @@ def uncertainty_reduction(reports: List[AgentReport]) -> float:
     return (h_first - h_last) / h_first
 
 
-def tom_delta(agent_reports: List[AgentReport],
-              baseline_reports: List[AgentReport],
-              ground_truth: Dict[str, int]) -> float:
+def tom_delta(
+    agent_reports: list[AgentReport], baseline_reports: list[AgentReport], ground_truth: dict[str, int]
+) -> float:
     """
     Compute theory-of-mind delta: accuracy_agent - accuracy_baseline.
 
@@ -190,8 +188,7 @@ def tom_delta(agent_reports: List[AgentReport],
     return baseline_brier - agent_brier  # positive = agent is better
 
 
-def compute_game_metrics(telemetry: GameTelemetry,
-                         ground_truth: Dict[str, int]) -> Dict[str, float]:
+def compute_game_metrics(telemetry: GameTelemetry, ground_truth: dict[str, int]) -> dict[str, float]:
     """
     Compute all per-game metrics from telemetry.
 
@@ -204,26 +201,22 @@ def compute_game_metrics(telemetry: GameTelemetry,
     """
     metrics = {}
 
-    for pid in ['p1', 'p2']:
+    for pid in ["p1", "p2"]:
         reports = telemetry.get_reports_for_player(pid)
         if not reports:
             continue
 
-        prefix = f'{pid}_'
-        metrics[f'{prefix}brier_score'] = brier_score(reports, ground_truth)
-        metrics[f'{prefix}log_loss'] = log_loss(reports, ground_truth)
-        metrics[f'{prefix}calibration_error'] = calibration_error(reports, ground_truth)
-        metrics[f'{prefix}uncertainty_reduction'] = uncertainty_reduction(reports)
+        prefix = f"{pid}_"
+        metrics[f"{prefix}brier_score"] = brier_score(reports, ground_truth)
+        metrics[f"{prefix}log_loss"] = log_loss(reports, ground_truth)
+        metrics[f"{prefix}calibration_error"] = calibration_error(reports, ground_truth)
+        metrics[f"{prefix}uncertainty_reduction"] = uncertainty_reduction(reports)
 
         ig = information_gain(reports)
-        metrics[f'{prefix}avg_info_gain'] = sum(ig) / len(ig) if ig else 0.0
-        metrics[f'{prefix}total_info_gain'] = sum(ig)
+        metrics[f"{prefix}avg_info_gain"] = sum(ig) / len(ig) if ig else 0.0
+        metrics[f"{prefix}total_info_gain"] = sum(ig)
 
-        metrics[f'{prefix}avg_belief_entropy'] = (
-            sum(r.belief_entropy() for r in reports) / len(reports)
-        )
-        metrics[f'{prefix}avg_prediction_confidence'] = (
-            sum(r.prediction_confidence() for r in reports) / len(reports)
-        )
+        metrics[f"{prefix}avg_belief_entropy"] = sum(r.belief_entropy() for r in reports) / len(reports)
+        metrics[f"{prefix}avg_prediction_confidence"] = sum(r.prediction_confidence() for r in reports) / len(reports)
 
     return metrics

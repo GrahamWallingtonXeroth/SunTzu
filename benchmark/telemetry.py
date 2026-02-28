@@ -17,14 +17,15 @@ Usage:
 import json
 import math
 import os
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Any, Tuple
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class BeliefState:
     """Probability distribution over an enemy force's hidden power value."""
-    distribution: Dict[int, float] = field(default_factory=dict)
+
+    distribution: dict[int, float] = field(default_factory=dict)
 
     def entropy(self) -> float:
         """Shannon entropy H = -sum(p * log2(p))."""
@@ -45,11 +46,11 @@ class BeliefState:
         return max(self.distribution, key=self.distribution.get)
 
     @staticmethod
-    def uniform() -> 'BeliefState':
+    def uniform() -> "BeliefState":
         """Uniform prior over power values 1-5."""
         return BeliefState(distribution={i: 0.2 for i in range(1, 6)})
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {str(k): v for k, v in self.distribution.items()}
 
 
@@ -65,13 +66,14 @@ class AgentReport:
     - chosen_orders: the orders this agent chose
     - confidence: self-reported confidence (0-1)
     """
+
     turn: int
     player_id: str
     strategy: str
-    beliefs: Dict[str, BeliefState] = field(default_factory=dict)
-    action_predictions: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    objective_prediction: Dict[str, float] = field(default_factory=dict)
-    chosen_orders: List[str] = field(default_factory=list)
+    beliefs: dict[str, BeliefState] = field(default_factory=dict)
+    action_predictions: dict[str, dict[str, float]] = field(default_factory=dict)
+    objective_prediction: dict[str, float] = field(default_factory=dict)
+    chosen_orders: list[str] = field(default_factory=list)
     confidence: float = 0.5
 
     def belief_entropy(self) -> float:
@@ -90,16 +92,16 @@ class AgentReport:
                 confs.append(max(pred.values()))
         return sum(confs) / len(confs) if confs else 0.0
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         d = {
-            'turn': self.turn,
-            'player_id': self.player_id,
-            'strategy': self.strategy,
-            'beliefs': {k: v.to_dict() for k, v in self.beliefs.items()},
-            'action_predictions': self.action_predictions,
-            'objective_prediction': self.objective_prediction,
-            'chosen_orders': self.chosen_orders,
-            'confidence': self.confidence,
+            "turn": self.turn,
+            "player_id": self.player_id,
+            "strategy": self.strategy,
+            "beliefs": {k: v.to_dict() for k, v in self.beliefs.items()},
+            "action_predictions": self.action_predictions,
+            "objective_prediction": self.objective_prediction,
+            "chosen_orders": self.chosen_orders,
+            "confidence": self.confidence,
         }
         return d
 
@@ -114,51 +116,57 @@ class EventLog:
     Events include: combat results, scout reveals, noose kills, movements.
     Used to compute prediction accuracy against actual outcomes.
     """
+
     turn: int
-    events: List[Dict[str, Any]] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
 
-    def add_combat(self, attacker_id: str, defender_id: str,
-                   attacker_power: int, defender_power: int,
-                   result: str) -> None:
-        self.events.append({
-            'type': 'combat',
-            'attacker': attacker_id,
-            'defender': defender_id,
-            'attacker_power': attacker_power,
-            'defender_power': defender_power,
-            'result': result,
-        })
+    def add_combat(
+        self, attacker_id: str, defender_id: str, attacker_power: int, defender_power: int, result: str
+    ) -> None:
+        self.events.append(
+            {
+                "type": "combat",
+                "attacker": attacker_id,
+                "defender": defender_id,
+                "attacker_power": attacker_power,
+                "defender_power": defender_power,
+                "result": result,
+            }
+        )
 
-    def add_scout_reveal(self, scout_id: str, target_id: str,
-                         revealed: str, actual_power: int) -> None:
-        self.events.append({
-            'type': 'scout_reveal',
-            'scout': scout_id,
-            'target': target_id,
-            'revealed': revealed,
-            'actual_power': actual_power,
-        })
+    def add_scout_reveal(self, scout_id: str, target_id: str, revealed: str, actual_power: int) -> None:
+        self.events.append(
+            {
+                "type": "scout_reveal",
+                "scout": scout_id,
+                "target": target_id,
+                "revealed": revealed,
+                "actual_power": actual_power,
+            }
+        )
 
-    def add_noose_kill(self, force_id: str, position: Tuple[int, int],
-                       was_sovereign: bool) -> None:
-        self.events.append({
-            'type': 'noose_kill',
-            'force': force_id,
-            'position': list(position),
-            'was_sovereign': was_sovereign,
-        })
+    def add_noose_kill(self, force_id: str, position: tuple[int, int], was_sovereign: bool) -> None:
+        self.events.append(
+            {
+                "type": "noose_kill",
+                "force": force_id,
+                "position": list(position),
+                "was_sovereign": was_sovereign,
+            }
+        )
 
-    def add_movement(self, force_id: str, from_pos: Tuple[int, int],
-                     to_pos: Tuple[int, int]) -> None:
-        self.events.append({
-            'type': 'movement',
-            'force': force_id,
-            'from': list(from_pos),
-            'to': list(to_pos),
-        })
+    def add_movement(self, force_id: str, from_pos: tuple[int, int], to_pos: tuple[int, int]) -> None:
+        self.events.append(
+            {
+                "type": "movement",
+                "force": force_id,
+                "from": list(from_pos),
+                "to": list(to_pos),
+            }
+        )
 
-    def to_dict(self) -> Dict:
-        return {'turn': self.turn, 'events': self.events}
+    def to_dict(self) -> dict:
+        return {"turn": self.turn, "events": self.events}
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict())
@@ -171,14 +179,15 @@ class GameTelemetry:
     Collects all AgentReports and EventLogs, then provides methods to
     compute benchmark metrics.
     """
-    game_id: str = ''
-    p1_strategy: str = ''
-    p2_strategy: str = ''
+
+    game_id: str = ""
+    p1_strategy: str = ""
+    p2_strategy: str = ""
     seed: int = 0
-    agent_reports: List[AgentReport] = field(default_factory=list)
-    event_logs: List[EventLog] = field(default_factory=list)
-    winner: Optional[str] = None
-    victory_type: Optional[str] = None
+    agent_reports: list[AgentReport] = field(default_factory=list)
+    event_logs: list[EventLog] = field(default_factory=list)
+    winner: str | None = None
+    victory_type: str | None = None
     turns: int = 0
 
     def add_report(self, report: AgentReport) -> None:
@@ -187,36 +196,36 @@ class GameTelemetry:
     def add_event_log(self, event_log: EventLog) -> None:
         self.event_logs.append(event_log)
 
-    def get_reports_for_player(self, player_id: str) -> List[AgentReport]:
+    def get_reports_for_player(self, player_id: str) -> list[AgentReport]:
         return [r for r in self.agent_reports if r.player_id == player_id]
 
     def to_jsonl(self) -> str:
         """Serialize as JSONL (one JSON object per line)."""
         lines = []
         header = {
-            'type': 'game_header',
-            'game_id': self.game_id,
-            'p1_strategy': self.p1_strategy,
-            'p2_strategy': self.p2_strategy,
-            'seed': self.seed,
-            'winner': self.winner,
-            'victory_type': self.victory_type,
-            'turns': self.turns,
+            "type": "game_header",
+            "game_id": self.game_id,
+            "p1_strategy": self.p1_strategy,
+            "p2_strategy": self.p2_strategy,
+            "seed": self.seed,
+            "winner": self.winner,
+            "victory_type": self.victory_type,
+            "turns": self.turns,
         }
         lines.append(json.dumps(header))
         for report in self.agent_reports:
-            entry = {'type': 'agent_report'}
+            entry = {"type": "agent_report"}
             entry.update(report.to_dict())
             lines.append(json.dumps(entry))
         for event_log in self.event_logs:
-            entry = {'type': 'event_log'}
+            entry = {"type": "event_log"}
             entry.update(event_log.to_dict())
             lines.append(json.dumps(entry))
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def write_jsonl(self, filepath: str) -> None:
         """Write telemetry to a JSONL file."""
-        os.makedirs(os.path.dirname(filepath) or '.', exist_ok=True)
-        with open(filepath, 'w') as f:
+        os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
+        with open(filepath, "w") as f:
             f.write(self.to_jsonl())
-            f.write('\n')
+            f.write("\n")

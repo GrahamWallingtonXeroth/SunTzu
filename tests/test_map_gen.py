@@ -1,13 +1,18 @@
 """Tests for 7x7 hex map generation — v4 with shrinking board support."""
 
-import pytest
 from map_gen import (
-    generate_map, get_hex_neighbors, hex_distance,
-    is_valid_hex, a_star_path, distance_from_center,
-    max_distance_for_shrink_stage, is_scorched,
-    BOARD_SIZE, CENTER_Q, CENTER_R,
+    BOARD_SIZE,
+    CENTER_Q,
+    CENTER_R,
+    a_star_path,
+    distance_from_center,
+    generate_map,
+    get_hex_neighbors,
+    hex_distance,
+    is_scorched,
+    is_valid_hex,
+    max_distance_for_shrink_stage,
 )
-from models import Hex
 
 
 class TestHexUtilities:
@@ -92,13 +97,13 @@ class TestMapGeneration:
 
     def test_has_3_contentious(self):
         m = generate_map(seed=42)
-        contentious = [h for h in m.values() if h.terrain == 'Contentious']
+        contentious = [h for h in m.values() if h.terrain == "Contentious"]
         assert len(contentious) == 3
 
     def test_contentious_near_center(self):
         m = generate_map(seed=42)
         for pos, h in m.items():
-            if h.terrain == 'Contentious':
+            if h.terrain == "Contentious":
                 q, r = pos
                 assert 2 <= q <= 4
                 assert 2 <= r <= 4
@@ -109,16 +114,16 @@ class TestMapGeneration:
         p1_positions = [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2)]
         p2_positions = [(6, 5), (6, 4), (6, 3), (5, 5), (5, 4)]
         for pos in p1_positions + p2_positions:
-            assert m[pos].terrain == 'Open', f"Starting position {pos} should be Open"
+            assert m[pos].terrain == "Open", f"Starting position {pos} should be Open"
 
     def test_has_difficult_terrain(self):
         m = generate_map(seed=42)
-        difficult = [h for h in m.values() if h.terrain == 'Difficult']
+        difficult = [h for h in m.values() if h.terrain == "Difficult"]
         assert len(difficult) >= 2
 
     def test_paths_exist_to_contentious(self):
         m = generate_map(seed=42)
-        contentious = [pos for pos, h in m.items() if h.terrain == 'Contentious']
+        contentious = [pos for pos, h in m.items() if h.terrain == "Contentious"]
         for ch in contentious:
             p1_path = a_star_path((0, 2), ch, m)
             p2_path = a_star_path((6, 4), ch, m)
@@ -140,7 +145,7 @@ class TestMapGeneration:
     def test_a_star_avoids_scorched(self):
         m = generate_map(seed=42)
         # Scorch a hex and verify A* avoids it
-        m[(3, 3)].terrain = 'Scorched'
+        m[(3, 3)].terrain = "Scorched"
         path = a_star_path((2, 3), (4, 3), m)
         if path:
             assert (3, 3) not in path
