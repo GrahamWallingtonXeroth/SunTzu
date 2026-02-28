@@ -19,10 +19,14 @@ dev = [
     "requests>=2.31,<3",
     "ruff>=0.4",
 ]
+llm = [
+    "anthropic>=0.40,<1",
+    "openai>=1.50,<2",
+]
 
 [build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["suntzu*", "benchmark*"]

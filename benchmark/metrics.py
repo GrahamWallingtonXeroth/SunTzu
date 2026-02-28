@@ -7,6 +7,9 @@ Computes per-game and aggregate metrics from telemetry data:
 - Calibration error: over/under-confidence per bin
 - Information gain: entropy reduction from scouting
 - Theory-of-mind delta: accuracy improvement from modeling opponent
+- Belief consistency: joint constraint satisfaction (powers 1-5 used once each)
+- Eliminated power tracking: zeroing out revealed powers from other forces
+- Format sensitivity: coefficient of variation across prompt formats
 """
 
 import math
@@ -188,6 +191,108 @@ def tom_delta(
     return baseline_brier - agent_brier  # positive = agent is better
 
 
+def belief_consistency(reports: list[AgentReport]) -> float:
+    """
+    Measure joint consistency of marginal beliefs.
+
+    Since powers 1-5 are each used exactly once, for each power k, the sum
+    of p(force_i = k) across all alive enemy forces should equal 1.0.
+
+    Returns average absolute deviation from 1.0 across all powers and reports.
+    Perfect = 0.0. Fully independent beliefs produce higher values.
+    """
+    total_deviation = 0.0
+    n = 0
+
+    for report in reports:
+        if len(report.beliefs) < 2:
+            continue
+        for power in range(1, 6):
+            marginal_sum = sum(belief.distribution.get(power, 0.0) for belief in report.beliefs.values())
+            total_deviation += abs(marginal_sum - 1.0)
+            n += 1
+
+    if n == 0:
+        return 0.0
+    return total_deviation / n
+
+
+def eliminated_power_tracking(
+    reports: list[AgentReport],
+    revealed_powers: dict[str, int],
+) -> float:
+    """
+    Check if agent correctly zeros out revealed powers from other forces.
+
+    When force A is revealed as power 3, all other forces should have p(3) = 0.
+    Returns fraction of cases where this constraint is satisfied (within tolerance).
+    Perfect = 1.0. No constraint awareness = ~0.0.
+
+    Args:
+        reports: Agent reports with belief distributions
+        revealed_powers: force_id -> revealed power value (from combat or exact scout)
+    """
+    correct = 0
+    total = 0
+    tolerance = 0.05
+
+    for report in reports:
+        for revealed_id, revealed_power in revealed_powers.items():
+            if revealed_id not in report.beliefs:
+                continue
+            # Check all OTHER forces in this report
+            for force_id, belief in report.beliefs.items():
+                if force_id == revealed_id:
+                    continue
+                total += 1
+                prob = belief.distribution.get(revealed_power, 0.0)
+                if prob <= tolerance:
+                    correct += 1
+
+    if total == 0:
+        return 1.0  # No cases to check
+    return correct / total
+
+
+def format_sensitivity(
+    metrics_by_format: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    """
+    Compute coefficient of variation for each metric across prompt formats.
+
+    Low CV = format-invariant (good: measuring reasoning).
+    High CV = format-sensitive (bad: measuring prompt comprehension).
+
+    Args:
+        metrics_by_format: {format_name: {metric_name: value}}
+
+    Returns:
+        {metric_name: coefficient_of_variation}
+    """
+    if len(metrics_by_format) < 2:
+        return {}
+
+    # Collect all metric names
+    all_metrics: set[str] = set()
+    for fmt_metrics in metrics_by_format.values():
+        all_metrics.update(fmt_metrics.keys())
+
+    result = {}
+    for metric_name in sorted(all_metrics):
+        values = [fmt_metrics[metric_name] for fmt_metrics in metrics_by_format.values() if metric_name in fmt_metrics]
+        if len(values) < 2:
+            continue
+        mean = sum(values) / len(values)
+        if mean == 0:
+            result[metric_name] = 0.0
+            continue
+        variance = sum((v - mean) ** 2 for v in values) / len(values)
+        std = math.sqrt(variance)
+        result[metric_name] = std / abs(mean)
+
+    return result
+
+
 def compute_game_metrics(telemetry: GameTelemetry, ground_truth: dict[str, int]) -> dict[str, float]:
     """
     Compute all per-game metrics from telemetry.
@@ -218,5 +323,39 @@ def compute_game_metrics(telemetry: GameTelemetry, ground_truth: dict[str, int])
 
         metrics[f"{prefix}avg_belief_entropy"] = sum(r.belief_entropy() for r in reports) / len(reports)
         metrics[f"{prefix}avg_prediction_confidence"] = sum(r.prediction_confidence() for r in reports) / len(reports)
+
+    return metrics
+
+
+def compute_extended_game_metrics(
+    telemetry: GameTelemetry,
+    ground_truth: dict[str, int],
+    revealed_powers: dict[str, int] | None = None,
+) -> dict[str, float]:
+    """
+    Extended version of compute_game_metrics with additional rigor metrics.
+
+    Adds:
+    - belief_consistency: joint constraint satisfaction
+    - eliminated_power_tracking: zeroing out revealed powers
+    Calls existing compute_game_metrics() internally.
+
+    Args:
+        telemetry: Complete game telemetry record
+        ground_truth: force_id -> actual power for all forces
+        revealed_powers: force_id -> revealed power (from combat/exact scout)
+    """
+    metrics = compute_game_metrics(telemetry, ground_truth)
+
+    for pid in ["p1", "p2"]:
+        reports = telemetry.get_reports_for_player(pid)
+        if not reports:
+            continue
+
+        prefix = f"{pid}_"
+        metrics[f"{prefix}belief_consistency"] = belief_consistency(reports)
+
+        if revealed_powers:
+            metrics[f"{prefix}eliminated_power_tracking"] = eliminated_power_tracking(reports, revealed_powers)
 
     return metrics
