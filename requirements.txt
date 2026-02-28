@@ -3,3 +3,5 @@ flask-cors>=4.0,<5
 gunicorn>=22.0,<23
 numpy>=2.0,<3
 noise>=1.2,<2
+anthropic>=0.40,<1
+openai>=1.50,<2

@@ -75,6 +75,7 @@ class AgentReport:
     objective_prediction: dict[str, float] = field(default_factory=dict)
     chosen_orders: list[str] = field(default_factory=list)
     confidence: float = 0.5
+    raw_reasoning: str = ""  # Free-text reasoning output for analysis
 
     def belief_entropy(self) -> float:
         """Average entropy across all belief distributions."""
@@ -186,6 +187,7 @@ class GameTelemetry:
     seed: int = 0
     agent_reports: list[AgentReport] = field(default_factory=list)
     event_logs: list[EventLog] = field(default_factory=list)
+    comprehension_results: list["ComprehensionResult"] = field(default_factory=list)
     winner: str | None = None
     victory_type: str | None = None
     turns: int = 0
@@ -223,9 +225,38 @@ class GameTelemetry:
             lines.append(json.dumps(entry))
         return "\n".join(lines)
 
+    def add_comprehension_result(self, result: "ComprehensionResult") -> None:
+        self.comprehension_results.append(result)
+
     def write_jsonl(self, filepath: str) -> None:
         """Write telemetry to a JSONL file."""
         os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
         with open(filepath, "w") as f:
             f.write(self.to_jsonl())
             f.write("\n")
+
+
+@dataclass
+class ComprehensionResult:
+    """Per-turn comprehension probe results.
+
+    Records whether the agent correctly understood the game state
+    before reasoning metrics are computed.
+    """
+
+    turn: int
+    player_id: str
+    probes: list[dict[str, Any]] = field(default_factory=list)
+    # Each probe: {question, expected, response, correct}
+    score: float = 0.0  # Fraction correct (0.0 to 1.0)
+
+    def to_dict(self) -> dict:
+        return {
+            "turn": self.turn,
+            "player_id": self.player_id,
+            "probes": self.probes,
+            "score": self.score,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict())
