@@ -82,10 +82,8 @@ class AnthropicProvider(LLMProvider):
         if self._client is None:
             try:
                 import anthropic
-            except ImportError:
-                raise ImportError(
-                    "anthropic package required. Install with: pip install anthropic"
-                )
+            except ImportError as err:
+                raise ImportError("anthropic package required. Install with: pip install anthropic") from err
             self._client = anthropic.Anthropic(api_key=self._api_key)
         return self._client
 
@@ -150,11 +148,13 @@ class AnthropicProvider(LLMProvider):
             if block.type == "text":
                 content += block.text
             elif block.type == "tool_use":
-                tool_calls.append({
-                    "name": block.name,
-                    "input": block.input,
-                    "id": block.id,
-                })
+                tool_calls.append(
+                    {
+                        "name": block.name,
+                        "input": block.input,
+                        "id": block.id,
+                    }
+                )
 
         return LLMResponse(
             content=content,
@@ -178,10 +178,8 @@ class OpenAIProvider(LLMProvider):
         if self._client is None:
             try:
                 import openai
-            except ImportError:
-                raise ImportError(
-                    "openai package required. Install with: pip install openai"
-                )
+            except ImportError as err:
+                raise ImportError("openai package required. Install with: pip install openai") from err
             self._client = openai.OpenAI(api_key=self._api_key)
         return self._client
 
@@ -197,7 +195,7 @@ class OpenAIProvider(LLMProvider):
         max_tokens: int = 4096,
     ) -> LLMResponse:
         client = self._get_client()
-        full_messages = [{"role": "system", "content": system}] + messages
+        full_messages = [{"role": "system", "content": system}, *messages]
         start = time.monotonic()
         response = client.chat.completions.create(
             model=self._model,
@@ -227,19 +225,21 @@ class OpenAIProvider(LLMProvider):
         max_tokens: int = 4096,
     ) -> LLMResponse:
         client = self._get_client()
-        full_messages = [{"role": "system", "content": system}] + messages
+        full_messages = [{"role": "system", "content": system}, *messages]
 
         # Convert Anthropic-style tools to OpenAI format
         openai_tools = []
         for tool in tools:
-            openai_tools.append({
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("input_schema", {}),
-                },
-            })
+            openai_tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("input_schema", {}),
+                    },
+                }
+            )
 
         start = time.monotonic()
         response = client.chat.completions.create(
@@ -255,12 +255,15 @@ class OpenAIProvider(LLMProvider):
         tool_calls = []
         if response.choices[0].message.tool_calls:
             import json
+
             for tc in response.choices[0].message.tool_calls:
-                tool_calls.append({
-                    "name": tc.function.name,
-                    "input": json.loads(tc.function.arguments),
-                    "id": tc.id,
-                })
+                tool_calls.append(
+                    {
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments),
+                        "id": tc.id,
+                    }
+                )
 
         usage = response.usage
         return LLMResponse(
@@ -279,8 +282,7 @@ class MockProvider(LLMProvider):
     Returns configurable responses for unit testing the harness.
     """
 
-    def __init__(self, responses: list[str] | None = None,
-                 tool_responses: list[list[dict]] | None = None):
+    def __init__(self, responses: list[str] | None = None, tool_responses: list[list[dict]] | None = None):
         self._responses = list(responses) if responses else []
         self._tool_responses = list(tool_responses) if tool_responses else []
         self._call_count = 0
@@ -297,11 +299,13 @@ class MockProvider(LLMProvider):
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> LLMResponse:
-        self.call_log.append({
-            "type": "complete",
-            "system": system,
-            "messages": messages,
-        })
+        self.call_log.append(
+            {
+                "type": "complete",
+                "system": system,
+                "messages": messages,
+            }
+        )
         content = self._responses.pop(0) if self._responses else "Mock response"
         self._call_count += 1
         return LLMResponse(
@@ -320,12 +324,14 @@ class MockProvider(LLMProvider):
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> LLMResponse:
-        self.call_log.append({
-            "type": "complete_with_tools",
-            "system": system,
-            "messages": messages,
-            "tools": [t["name"] for t in tools],
-        })
+        self.call_log.append(
+            {
+                "type": "complete_with_tools",
+                "system": system,
+                "messages": messages,
+                "tools": [t["name"] for t in tools],
+            }
+        )
         content = self._responses.pop(0) if self._responses else ""
         tool_calls = self._tool_responses.pop(0) if self._tool_responses else []
         self._call_count += 1

@@ -1,7 +1,6 @@
 """Tests for the extraction pipeline."""
 
 from benchmark.extraction import (
-    ExtractionResult,
     extract_beliefs_and_orders,
     normalize_beliefs,
     validate_beliefs,
@@ -114,8 +113,7 @@ class TestToolCallingExtraction:
                     "name": "submit_orders",
                     "input": {
                         "orders": [
-                            {"force_id": "p1_f1", "order_type": "Move",
-                             "target_q": 3, "target_r": 3},
+                            {"force_id": "p1_f1", "order_type": "Move", "target_q": 3, "target_r": 3},
                         ]
                     },
                     "id": "call_2",
@@ -130,7 +128,10 @@ class TestToolCallingExtraction:
 
         result = extract_beliefs_and_orders(
             "I think p2_f1 is probably power 3",
-            view, "p1", provider, method="tool_calling",
+            view,
+            "p1",
+            provider,
+            method="tool_calling",
         )
 
         assert result.extraction_success

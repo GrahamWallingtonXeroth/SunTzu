@@ -1,7 +1,6 @@
 """Tests for multi-format state renderers."""
 
 import json
-import random
 
 from benchmark.renderers import (
     RENDERERS,
@@ -143,9 +142,7 @@ class TestAllFormatsContainSameInfo:
         for format_name, renderer in RENDERERS.items():
             text = renderer(view, config)
             for f in view["your_forces"]:
-                assert f["id"] in text, (
-                    f"Format '{format_name}' missing own force {f['id']}"
-                )
+                assert f["id"] in text, f"Format '{format_name}' missing own force {f['id']}"
 
     def test_all_formats_contain_turn(self):
         view, _ = _make_view()
@@ -153,9 +150,7 @@ class TestAllFormatsContainSameInfo:
         turn_str = str(view["turn"])
         for format_name, renderer in RENDERERS.items():
             text = renderer(view, config)
-            assert turn_str in text, (
-                f"Format '{format_name}' missing turn number {turn_str}"
-            )
+            assert turn_str in text, f"Format '{format_name}' missing turn number {turn_str}"
 
 
 class TestHistoryRendering:
@@ -163,8 +158,15 @@ class TestHistoryRendering:
         view, _ = _make_view()
         config = load_config()
         history = [
-            {"turn": 1, "type": "combat", "attacker": "p1_f1", "defender": "p2_f1",
-             "attacker_power": 5, "defender_power": 2, "result": "attacker_wins"},
+            {
+                "turn": 1,
+                "type": "combat",
+                "attacker": "p1_f1",
+                "defender": "p2_f1",
+                "attacker_power": 5,
+                "defender_power": 2,
+                "result": "attacker_wins",
+            },
         ]
         text = render_narrative(view, config, history=history)
         assert "Combat" in text or "combat" in text

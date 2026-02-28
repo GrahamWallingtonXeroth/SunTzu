@@ -208,10 +208,7 @@ def belief_consistency(reports: list[AgentReport]) -> float:
         if len(report.beliefs) < 2:
             continue
         for power in range(1, 6):
-            marginal_sum = sum(
-                belief.distribution.get(power, 0.0)
-                for belief in report.beliefs.values()
-            )
+            marginal_sum = sum(belief.distribution.get(power, 0.0) for belief in report.beliefs.values())
             total_deviation += abs(marginal_sum - 1.0)
             n += 1
 
@@ -282,11 +279,7 @@ def format_sensitivity(
 
     result = {}
     for metric_name in sorted(all_metrics):
-        values = [
-            fmt_metrics[metric_name]
-            for fmt_metrics in metrics_by_format.values()
-            if metric_name in fmt_metrics
-        ]
+        values = [fmt_metrics[metric_name] for fmt_metrics in metrics_by_format.values() if metric_name in fmt_metrics]
         if len(values) < 2:
             continue
         mean = sum(values) / len(values)
@@ -363,8 +356,6 @@ def compute_extended_game_metrics(
         metrics[f"{prefix}belief_consistency"] = belief_consistency(reports)
 
         if revealed_powers:
-            metrics[f"{prefix}eliminated_power_tracking"] = eliminated_power_tracking(
-                reports, revealed_powers
-            )
+            metrics[f"{prefix}eliminated_power_tracking"] = eliminated_power_tracking(reports, revealed_powers)
 
     return metrics

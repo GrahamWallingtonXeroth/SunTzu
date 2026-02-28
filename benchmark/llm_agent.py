@@ -23,7 +23,7 @@ from benchmark.extraction import (
 from benchmark.llm_agent_interface import LLMAgent
 from benchmark.providers import LLMProvider
 from benchmark.renderers import RENDERERS, render_rules_reference
-from benchmark.telemetry import AgentReport, BeliefState
+from benchmark.telemetry import AgentReport
 from models import Player
 from orders import Order, OrderType
 from state import GameState, get_player_view, load_config
@@ -88,9 +88,9 @@ class ReasoningAgent(LLMAgent):
         for fid, pos in zip(force_ids, positions, strict=False):
             user_msg += f"  {fid} at ({pos[0]},{pos[1]})\n"
         user_msg += (
-            f"\nConsider which positions are most exposed to enemy contact "
-            f"and where your Sovereign will be safest. Reason about your "
-            f"deployment strategy, then assign powers."
+            "\nConsider which positions are most exposed to enemy contact "
+            "and where your Sovereign will be safest. Reason about your "
+            "deployment strategy, then assign powers."
         )
 
         try:
@@ -104,7 +104,10 @@ class ReasoningAgent(LLMAgent):
 
             # Second: extract deployment
             assignments = extract_deployment(
-                response.content, player.id, force_ids, self._provider,
+                response.content,
+                player.id,
+                force_ids,
+                self._provider,
             )
             if set(assignments.values()) == {1, 2, 3, 4, 5}:
                 return assignments
@@ -145,7 +148,10 @@ class ReasoningAgent(LLMAgent):
 
         # Stage 3: Extraction — convert to structured data
         extraction = extract_beliefs_and_orders(
-            reasoning_text, view, player_id, self._provider,
+            reasoning_text,
+            view,
+            player_id,
+            self._provider,
             method=self._extraction_method,
         )
         self._track_tokens_from_extraction()
@@ -155,7 +161,10 @@ class ReasoningAgent(LLMAgent):
 
         # Build AgentReport
         report = self._build_report(
-            game_state.turn, player_id, extraction, reasoning_text,
+            game_state.turn,
+            player_id,
+            extraction,
+            reasoning_text,
         )
 
         # Update history
@@ -197,7 +206,7 @@ class ReasoningAgent(LLMAgent):
         if self._history_mode == "none" or not self._turn_history:
             return None
         if self._history_mode == "last_n":
-            return self._turn_history[-self._history_limit:]
+            return self._turn_history[-self._history_limit :]
         return self._turn_history  # "full" mode
 
     def _update_history(self, game_state: GameState, view: dict) -> None:
@@ -205,14 +214,19 @@ class ReasoningAgent(LLMAgent):
         # Extract relevant events from the game log
         for log_entry in game_state.log:
             if log_entry.get("turn") == game_state.turn:
-                self._turn_history.append({
-                    "turn": game_state.turn,
-                    "type": "game_event",
-                    "event": log_entry.get("event", ""),
-                })
+                self._turn_history.append(
+                    {
+                        "turn": game_state.turn,
+                        "type": "game_event",
+                        "event": log_entry.get("event", ""),
+                    }
+                )
 
     def _build_orders(
-        self, extraction: ExtractionResult, player_id: str, game_state: GameState,
+        self,
+        extraction: ExtractionResult,
+        player_id: str,
+        game_state: GameState,
     ) -> list[Order]:
         """Convert extracted order dicts to Order objects."""
         from map_gen import get_hex_neighbors
@@ -264,6 +278,7 @@ class ReasoningAgent(LLMAgent):
         for force in player.get_alive_forces():
             if force.id not in ordered_forces:
                 from map_gen import get_hex_neighbors
+
                 neighbors = get_hex_neighbors(force.position[0], force.position[1])
                 valid = [n for n in neighbors if game_state.is_valid_position(n)]
                 if valid:
@@ -274,7 +289,10 @@ class ReasoningAgent(LLMAgent):
         return orders
 
     def _build_report(
-        self, turn: int, player_id: str, extraction: ExtractionResult,
+        self,
+        turn: int,
+        player_id: str,
+        extraction: ExtractionResult,
         reasoning_text: str,
     ) -> AgentReport:
         """Build AgentReport from extraction results."""

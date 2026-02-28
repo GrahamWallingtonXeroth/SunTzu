@@ -42,8 +42,12 @@ EXTRACTION_TOOLS = [
                             "power_5_probability": {"type": "number", "description": "Probability of power 5"},
                         },
                         "required": [
-                            "force_id", "power_1_probability", "power_2_probability",
-                            "power_3_probability", "power_4_probability", "power_5_probability",
+                            "force_id",
+                            "power_1_probability",
+                            "power_2_probability",
+                            "power_3_probability",
+                            "power_4_probability",
+                            "power_5_probability",
                         ],
                     },
                 },
@@ -54,8 +58,7 @@ EXTRACTION_TOOLS = [
     {
         "name": "submit_orders",
         "description": (
-            "Submit your orders for each of your alive forces this turn. "
-            "Each force must receive exactly one order."
+            "Submit your orders for each of your alive forces this turn. Each force must receive exactly one order."
         ),
         "input_schema": {
             "type": "object",
@@ -236,6 +239,7 @@ def _extract_via_secondary(
         )
 
         import json
+
         # Try to parse JSON from response
         content = response.content.strip()
         # Handle markdown code blocks
@@ -343,16 +347,12 @@ def validate_beliefs(beliefs: dict[str, BeliefState], view: dict) -> list[str]:
         # Check distribution sums to ~1.0
         total = sum(belief.distribution.values())
         if abs(total - 1.0) > 0.05:
-            violations.append(
-                f"Belief for {force_id} sums to {total:.3f}, expected ~1.0"
-            )
+            violations.append(f"Belief for {force_id} sums to {total:.3f}, expected ~1.0")
 
         # Check all probabilities in [0, 1]
         for power, prob in belief.distribution.items():
             if prob < -0.01 or prob > 1.01:
-                violations.append(
-                    f"Belief for {force_id} power {power} = {prob:.3f}, out of [0,1]"
-                )
+                violations.append(f"Belief for {force_id} power {power} = {prob:.3f}, out of [0,1]")
 
     # Check beliefs exist for visible enemy forces
     enemy_ids = {f["id"] for f in view.get("enemy_forces", [])}
@@ -368,8 +368,7 @@ def validate_beliefs(beliefs: dict[str, BeliefState], view: dict) -> list[str]:
                 prob = beliefs[ef["id"]].distribution.get(actual_power, 0.0)
                 if prob < 0.9:
                     violations.append(
-                        f"Revealed force {ef['id']} has power {actual_power} but "
-                        f"belief probability is only {prob:.3f}"
+                        f"Revealed force {ef['id']} has power {actual_power} but belief probability is only {prob:.3f}"
                     )
 
     return violations

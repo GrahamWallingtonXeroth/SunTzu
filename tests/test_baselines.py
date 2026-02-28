@@ -1,6 +1,5 @@
 """Tests for baseline agent ladder."""
 
-import math
 import random
 
 from benchmark.baselines import (
@@ -10,8 +9,7 @@ from benchmark.baselines import (
     RandomBaselineAgent,
     StatelessRationalAgent,
 )
-from benchmark.metrics import brier_score, log_loss
-from benchmark.telemetry import BeliefState
+from benchmark.metrics import brier_score
 from state import apply_deployment, initialize_game
 
 
@@ -79,7 +77,7 @@ class TestPerfectMemoryBaseline:
         agent = PerfectMemoryAgent()
         game = _make_game()
         rng = random.Random(42)
-        orders, report = agent.observe_and_plan("p1", game, rng)
+        orders, _report = agent.observe_and_plan("p1", game, rng)
         assert len(orders) > 0
 
     def test_accumulates_knowledge(self):
@@ -114,7 +112,6 @@ class TestPerfectMemoryBaseline:
 
         # Make another force visible
         # Move p2_f2 close enough to be visible
-        from map_gen import hex_distance
         # Check which p2 forces are visible from p1 positions
         _, report = agent.observe_and_plan("p1", game, rng)
 
@@ -177,12 +174,10 @@ class TestBaselineLadder:
         rng = random.Random(42)
         for name, cls in BASELINE_AGENTS.items():
             agent = cls()
-            orders, report = agent.observe_and_plan("p1", game, rng)
+            _orders, report = agent.observe_and_plan("p1", game, rng)
             assert report.player_id == "p1", f"{name} has wrong player_id"
             assert report.turn == game.turn, f"{name} has wrong turn"
             # Beliefs should have valid distributions
             for fid, belief in report.beliefs.items():
                 total = sum(belief.distribution.values())
-                assert abs(total - 1.0) < 0.01, (
-                    f"{name} belief for {fid} sums to {total}"
-                )
+                assert abs(total - 1.0) < 0.01, f"{name} belief for {fid} sums to {total}"

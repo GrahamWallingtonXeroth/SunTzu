@@ -98,10 +98,7 @@ def render_history(events: list[dict], player_id: str, max_turns: int | None = N
             att_p = event.get("attacker_power", "?")
             def_p = event.get("defender_power", "?")
             result = event.get("result", "?")
-            lines.append(
-                f"  Turn {turn}: Combat - {att} (power {att_p}) vs {dfn} (power {def_p}), "
-                f"result: {result}"
-            )
+            lines.append(f"  Turn {turn}: Combat - {att} (power {att_p}) vs {dfn} (power {def_p}), result: {result}")
         elif etype == "scout_reveal":
             scout = event.get("scout", "?")
             target = event.get("target", "?")
@@ -127,16 +124,18 @@ def _format_own_forces(forces: list[dict]) -> list[dict]:
     result = []
     for f in forces:
         pos = f.get("position", {})
-        result.append({
-            "id": f["id"],
-            "q": pos.get("q", 0),
-            "r": pos.get("r", 0),
-            "power": f.get("power"),
-            "is_sovereign": f.get("power") == 1,
-            "has_supply": f.get("has_supply", False),
-            "revealed": f.get("revealed", False),
-            "fortified": f.get("fortified", False),
-        })
+        result.append(
+            {
+                "id": f["id"],
+                "q": pos.get("q", 0),
+                "r": pos.get("r", 0),
+                "power": f.get("power"),
+                "is_sovereign": f.get("power") == 1,
+                "has_supply": f.get("has_supply", False),
+                "revealed": f.get("revealed", False),
+                "fortified": f.get("fortified", False),
+            }
+        )
     return result
 
 
@@ -188,8 +187,7 @@ def render_narrative(view: dict, config: dict, history: list[dict] | None = None
     dom_keys = list(dom.keys())
     if len(dom_keys) >= 2:
         parts.append(
-            f"Domination progress: you have {dom[dom_keys[0]]}, enemy has {dom[dom_keys[1]]} "
-            f"consecutive turns."
+            f"Domination progress: you have {dom[dom_keys[0]]}, enemy has {dom[dom_keys[1]]} consecutive turns."
         )
 
     if shrink > 0:
@@ -202,9 +200,7 @@ def render_narrative(view: dict, config: dict, history: list[dict] | None = None
         sov = " (your Sovereign)" if f["is_sovereign"] else ""
         supply = "has supply" if f["has_supply"] else "NO SUPPLY"
         rev = ", revealed to enemy" if f["revealed"] else ""
-        parts.append(
-            f"  {f['id']} at position ({f['q']},{f['r']}), power {f['power']}{sov}, {supply}{rev}."
-        )
+        parts.append(f"  {f['id']} at position ({f['q']},{f['r']}), power {f['power']}{sov}, {supply}{rev}.")
 
     # Enemy forces
     enemies = _format_enemy_forces(view.get("enemy_forces", []))

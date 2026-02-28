@@ -13,11 +13,9 @@ from __future__ import annotations
 import json
 import math
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from benchmark.baselines import BASELINE_AGENTS, OracleAgent
 from benchmark.comprehension import (
     COMPREHENSION_THRESHOLD,
     format_probes_as_prompt,
@@ -25,13 +23,11 @@ from benchmark.comprehension import (
     parse_probe_responses,
     score_comprehension,
 )
-from benchmark.llm_agent_interface import LLMAgent, MockLLMAgent
+from benchmark.llm_agent_interface import LLMAgent
 from benchmark.metrics import (
-    belief_consistency,
     compute_extended_game_metrics,
-    format_sensitivity,
 )
-from benchmark.telemetry import AgentReport, ComprehensionResult, EventLog, GameTelemetry
+from benchmark.telemetry import ComprehensionResult, EventLog, GameTelemetry
 from orders import resolve_orders
 from state import GameState, apply_deployment, get_player_view, initialize_game, load_config
 from upkeep import perform_upkeep
@@ -79,8 +75,7 @@ class GameResult:
             "metrics": self.metrics,
             "comprehension_scores": self.comprehension_scores,
             "avg_comprehension": (
-                sum(self.comprehension_scores) / len(self.comprehension_scores)
-                if self.comprehension_scores else 0.0
+                sum(self.comprehension_scores) / len(self.comprehension_scores) if self.comprehension_scores else 0.0
             ),
             "total_tokens": self.total_input_tokens + self.total_output_tokens,
             "total_latency_ms": self.total_latency_ms,
@@ -142,10 +137,12 @@ class BenchmarkRunner:
             if (
                 self.config.comprehension_frequency > 0
                 and game.turn % self.config.comprehension_frequency == 1
-                and hasattr(agent, '_provider')
+                and hasattr(agent, "_provider")
             ):
                 comp_result = self._run_comprehension_probes(
-                    agent, "p1", game,
+                    agent,
+                    "p1",
+                    game,
                 )
                 if comp_result:
                     telemetry.add_comprehension_result(comp_result)
@@ -234,9 +231,12 @@ class BenchmarkRunner:
 
         for agent in self.config.agents:
             for opponent in self.config.opponents:
-                for seed_idx, seed in enumerate(self.config.seeds[:self.config.games_per_condition]):
+                for seed_idx, seed in enumerate(self.config.seeds[: self.config.games_per_condition]):
                     game_result = self.run_single_game(
-                        agent, opponent, seed, rng_seed=seed_idx * 1000,
+                        agent,
+                        opponent,
+                        seed,
+                        rng_seed=seed_idx * 1000,
                     )
                     report.game_results.append(game_result)
 
@@ -247,13 +247,16 @@ class BenchmarkRunner:
         return report
 
     def _run_comprehension_probes(
-        self, agent: LLMAgent, player_id: str, game_state: GameState,
+        self,
+        agent: LLMAgent,
+        player_id: str,
+        game_state: GameState,
     ) -> ComprehensionResult | None:
         """Run comprehension probes and score responses."""
         view = get_player_view(game_state, player_id)
         probes = generate_probes(view, game_state, player_id, self._game_config, n_probes=5)
 
-        if not probes or not hasattr(agent, '_provider'):
+        if not probes or not hasattr(agent, "_provider"):
             return None
 
         prompt = format_probes_as_prompt(probes)
@@ -270,13 +273,15 @@ class BenchmarkRunner:
 
             probe_records = []
             for probe, resp in zip(probes, responses, strict=False):
-                probe_records.append({
-                    "question": probe.question,
-                    "expected": probe.expected_answer,
-                    "response": resp,
-                    "correct": probe.validate(resp),
-                    "category": probe.category,
-                })
+                probe_records.append(
+                    {
+                        "question": probe.question,
+                        "expected": probe.expected_answer,
+                        "response": resp,
+                        "correct": probe.validate(resp),
+                        "category": probe.category,
+                    }
+                )
 
             return ComprehensionResult(
                 turn=game_state.turn,
@@ -288,7 +293,8 @@ class BenchmarkRunner:
             return None
 
     def _aggregate_metrics(
-        self, results: list[GameResult],
+        self,
+        results: list[GameResult],
     ) -> dict[str, dict[str, float]]:
         """Aggregate metrics across games with confidence intervals."""
         # Group by agent
@@ -333,7 +339,8 @@ class BenchmarkRunner:
         return aggregate
 
     def _aggregate_comprehension(
-        self, results: list[GameResult],
+        self,
+        results: list[GameResult],
     ) -> dict[str, float]:
         """Aggregate comprehension scores by agent."""
         by_agent: dict[str, list[float]] = {}
@@ -348,8 +355,7 @@ class BenchmarkRunner:
             avg = sum(scores) / len(scores) if scores else 0.0
             summary[f"{agent_name}_avg_comprehension"] = avg
             summary[f"{agent_name}_comprehension_pass_rate"] = (
-                sum(1 for s in scores if s >= COMPREHENSION_THRESHOLD) / len(scores)
-                if scores else 0.0
+                sum(1 for s in scores if s >= COMPREHENSION_THRESHOLD) / len(scores) if scores else 0.0
             )
 
         return summary

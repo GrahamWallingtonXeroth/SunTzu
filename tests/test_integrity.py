@@ -1,7 +1,5 @@
 """Tests for information integrity verification."""
 
-import random
-
 from benchmark.integrity import verify_fog_of_war, verify_prompt_integrity
 from benchmark.renderers import render_narrative
 from state import apply_deployment, get_player_view, initialize_game, load_config

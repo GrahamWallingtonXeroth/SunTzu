@@ -32,7 +32,10 @@ def _valid_moves(force, game_state: GameState) -> list[tuple[int, int]]:
     for nq, nr in get_hex_neighbors(force.position[0], force.position[1]):
         if game_state.is_valid_position((nq, nr)):
             occupant = game_state.get_force_at_position((nq, nr))
-            if occupant is None or game_state.get_force_owner(occupant.id).id != game_state.get_force_owner(force.id).id:
+            if (
+                occupant is None
+                or game_state.get_force_owner(occupant.id).id != game_state.get_force_owner(force.id).id
+            ):
                 targets.append((nq, nr))
     return targets
 
@@ -65,9 +68,9 @@ def _build_uniform_beliefs(opponent: Player | None) -> dict[str, BeliefState]:
     return beliefs
 
 
-def _build_report(turn: int, player_id: str, strategy: str,
-                  beliefs: dict[str, BeliefState],
-                  orders: list[Order]) -> AgentReport:
+def _build_report(
+    turn: int, player_id: str, strategy: str, beliefs: dict[str, BeliefState], orders: list[Order]
+) -> AgentReport:
     """Build an AgentReport from beliefs and orders."""
     order_strs = []
     for o in orders:
@@ -105,7 +108,10 @@ class RandomBaselineAgent(LLMAgent):
         return {f.id: p for f, p in zip(player.forces, powers, strict=False)}
 
     def observe_and_plan(
-        self, player_id: str, game_state: GameState, rng: random.Random,
+        self,
+        player_id: str,
+        game_state: GameState,
+        rng: random.Random,
     ) -> tuple[list[Order], AgentReport]:
         player = game_state.get_player_by_id(player_id)
         opponent = game_state.get_opponent(player_id)
@@ -140,7 +146,10 @@ class StatelessRationalAgent(LLMAgent):
         return dict(zip(ids, powers, strict=False))
 
     def observe_and_plan(
-        self, player_id: str, game_state: GameState, rng: random.Random,
+        self,
+        player_id: str,
+        game_state: GameState,
+        rng: random.Random,
     ) -> tuple[list[Order], AgentReport]:
         player = game_state.get_player_by_id(player_id)
         opponent = game_state.get_opponent(player_id)
@@ -171,8 +180,7 @@ class StatelessRationalAgent(LLMAgent):
             if force.is_sovereign:
                 # Sovereign: move toward center, fortify if enemies nearby
                 enemies_near = opponent and any(
-                    hex_distance(force.position[0], force.position[1],
-                                e.position[0], e.position[1]) <= 2
+                    hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]) <= 2
                     for e in opponent.get_alive_forces()
                 )
                 if enemies_near and _can_order(force, player, OrderType.FORTIFY):
@@ -215,7 +223,10 @@ class PerfectMemoryAgent(LLMAgent):
         return dict(zip(ids, powers, strict=False))
 
     def observe_and_plan(
-        self, player_id: str, game_state: GameState, rng: random.Random,
+        self,
+        player_id: str,
+        game_state: GameState,
+        rng: random.Random,
     ) -> tuple[list[Order], AgentReport]:
         player = game_state.get_player_by_id(player_id)
         opponent = game_state.get_opponent(player_id)
@@ -272,15 +283,13 @@ class PerfectMemoryAgent(LLMAgent):
             # Try to scout unknown nearby enemies
             if opponent and force.power and force.power <= 3:
                 visible_enemies = [
-                    e for e in opponent.get_alive_forces()
-                    if hex_distance(force.position[0], force.position[1],
-                                    e.position[0], e.position[1]) <= 2
+                    e
+                    for e in opponent.get_alive_forces()
+                    if hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]) <= 2
                 ]
-                unscouted = [e for e in visible_enemies
-                             if e.id not in self._accumulated_knowledge]
+                unscouted = [e for e in visible_enemies if e.id not in self._accumulated_knowledge]
                 if unscouted and _can_order(force, player, OrderType.SCOUT):
-                    orders.append(Order(OrderType.SCOUT, force,
-                                        scout_target_id=unscouted[0].id))
+                    orders.append(Order(OrderType.SCOUT, force, scout_target_id=unscouted[0].id))
                     continue
 
             best = _move_toward(force, center, game_state)
@@ -309,7 +318,10 @@ class OracleAgent(LLMAgent):
         return dict(zip(ids, powers, strict=False))
 
     def observe_and_plan(
-        self, player_id: str, game_state: GameState, rng: random.Random,
+        self,
+        player_id: str,
+        game_state: GameState,
+        rng: random.Random,
     ) -> tuple[list[Order], AgentReport]:
         player = game_state.get_player_by_id(player_id)
         opponent = game_state.get_opponent(player_id)
@@ -338,8 +350,7 @@ class OracleAgent(LLMAgent):
                     orders.append(Order(OrderType.AMBUSH, force))
                 else:
                     # Move away from enemies
-                    best = _move_toward(force, (0, 0) if player_id == "p1" else (6, 6),
-                                        game_state)
+                    best = _move_toward(force, (0, 0) if player_id == "p1" else (6, 6), game_state)
                     if best:
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                 continue

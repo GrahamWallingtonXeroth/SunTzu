@@ -5,28 +5,19 @@ Tests the complete pipeline: agent plays game, telemetry collected, metrics comp
 Uses MockLLMAgent (no API calls) to verify the infrastructure works end-to-end.
 """
 
-import math
-import random
-
 from benchmark.baselines import (
     OracleAgent,
-    PerfectMemoryAgent,
     RandomBaselineAgent,
     StatelessRationalAgent,
 )
 from benchmark.llm_agent_interface import MockLLMAgent
 from benchmark.metrics import (
     belief_consistency,
-    brier_score,
-    compute_extended_game_metrics,
     eliminated_power_tracking,
     format_sensitivity,
 )
-from benchmark.runner import BenchmarkRunner, ExperimentConfig, GameResult
-from benchmark.telemetry import AgentReport, BeliefState, EventLog, GameTelemetry
-from orders import resolve_orders
-from state import apply_deployment, initialize_game
-from upkeep import perform_upkeep
+from benchmark.runner import BenchmarkRunner, ExperimentConfig
+from benchmark.telemetry import AgentReport, BeliefState
 
 
 class TestNewMetrics:
@@ -37,8 +28,7 @@ class TestNewMetrics:
         reports = [AgentReport(turn=1, player_id="p1", strategy="test")]
         # 5 forces, each assigned exactly one power
         reports[0].beliefs = {
-            f"f{i}": BeliefState(distribution={i: 1.0, **{j: 0.0 for j in range(1, 6) if j != i}})
-            for i in range(1, 6)
+            f"f{i}": BeliefState(distribution={i: 1.0, **{j: 0.0 for j in range(1, 6) if j != i}}) for i in range(1, 6)
         }
         score = belief_consistency(reports)
         assert abs(score) < 0.01
@@ -46,9 +36,7 @@ class TestNewMetrics:
     def test_belief_consistency_uniform(self):
         """Uniform beliefs violate joint constraints."""
         reports = [AgentReport(turn=1, player_id="p1", strategy="test")]
-        reports[0].beliefs = {
-            f"f{i}": BeliefState.uniform() for i in range(1, 6)
-        }
+        reports[0].beliefs = {f"f{i}": BeliefState.uniform() for i in range(1, 6)}
         score = belief_consistency(reports)
         # Uniform: each power sums to 5*0.2 = 1.0, so consistency = 0.0
         # This is actually consistent by coincidence (5 forces * 0.2 = 1.0)
