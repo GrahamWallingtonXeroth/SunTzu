@@ -48,29 +48,33 @@ returns but strategic understanding always helps.
 """
 
 import copy
+import itertools
 import math
 import random
-import itertools
-from typing import List, Dict, Tuple, Any, Optional, Set
 from collections import defaultdict
 
-from state import GameState
+from map_gen import hex_distance
+from models import Player
 from orders import (
-    Order, OrderType, resolve_orders, has_supply,
+    Order,
+    OrderType,
+    resolve_orders,
 )
-from upkeep import perform_upkeep, get_controlled_contentious
-from map_gen import get_hex_neighbors, hex_distance, BOARD_SIZE
-from models import Force, Player
-
+from state import GameState
 from tests.simulate import (
-    Strategy, _valid_moves, _valid_charge_targets, _visible_enemies,
-    _contentious_hexes, _move_toward, _can_order,
+    Strategy,
+    _can_order,
+    _contentious_hexes,
+    _move_toward,
+    _valid_moves,
+    _visible_enemies,
 )
-
+from upkeep import perform_upkeep
 
 # ===========================================================================
 # TIER 2: STATEFUL PLANNERS — Memory and Pattern Recognition
 # ===========================================================================
+
 
 class StatefulStrategy(Strategy):
     """Base class for strategies with between-turn memory.
@@ -85,13 +89,14 @@ class StatefulStrategy(Strategy):
     This is the minimum sophistication needed to measure whether
     the game rewards intelligence beyond reactive play.
     """
+
     name = "stateful_base"
 
     def __init__(self):
-        self._turn_history: List[Dict] = []  # snapshot per turn
-        self._enemy_positions: Dict[str, List[Tuple]] = defaultdict(list)  # force_id → positions
-        self._suspected_sovereign: Dict[str, float] = defaultdict(float)  # force_id → score
-        self._my_player_id: Optional[str] = None
+        self._turn_history: list[dict] = []  # snapshot per turn
+        self._enemy_positions: dict[str, list[tuple]] = defaultdict(list)  # force_id → positions
+        self._suspected_sovereign: dict[str, float] = defaultdict(float)  # force_id → score
+        self._my_player_id: str | None = None
 
     def _observe(self, player_id: str, game_state: GameState):
         """Record observable state for pattern analysis."""
@@ -104,8 +109,7 @@ class StatefulStrategy(Strategy):
         # Track enemy positions
         for force in opponent.get_alive_forces():
             visible = any(
-                hex_distance(f.position[0], f.position[1],
-                             force.position[0], force.position[1]) <= 2
+                hex_distance(f.position[0], f.position[1], force.position[0], force.position[1]) <= 2
                 for f in player.get_alive_forces()
             )
             if visible:
@@ -119,14 +123,18 @@ class StatefulStrategy(Strategy):
                 if prev != curr:
                     # Find nearest of our forces to their previous position
                     our_nearest = min(
-                        (hex_distance(prev[0], prev[1], f.position[0], f.position[1])
-                         for f in player.get_alive_forces()),
-                        default=99
+                        (
+                            hex_distance(prev[0], prev[1], f.position[0], f.position[1])
+                            for f in player.get_alive_forces()
+                        ),
+                        default=99,
                     )
                     our_nearest_now = min(
-                        (hex_distance(curr[0], curr[1], f.position[0], f.position[1])
-                         for f in player.get_alive_forces()),
-                        default=99
+                        (
+                            hex_distance(curr[0], curr[1], f.position[0], f.position[1])
+                            for f in player.get_alive_forces()
+                        ),
+                        default=99,
                     )
                     # If they moved AWAY from us, that's retreat behavior
                     if our_nearest_now > our_nearest:
@@ -136,13 +144,11 @@ class StatefulStrategy(Strategy):
         if opponent.get_alive_forces():
             center = (3, 3)
             avg_dist = sum(
-                hex_distance(f.position[0], f.position[1], center[0], center[1])
-                for f in opponent.get_alive_forces()
+                hex_distance(f.position[0], f.position[1], center[0], center[1]) for f in opponent.get_alive_forces()
             ) / len(opponent.get_alive_forces())
 
             for force in opponent.get_alive_forces():
-                dist = hex_distance(force.position[0], force.position[1],
-                                    center[0], center[1])
+                dist = hex_distance(force.position[0], force.position[1], center[0], center[1])
                 if dist > avg_dist + 0.5:  # further from center than average
                     self._suspected_sovereign[force.id] += 0.3
 
@@ -153,14 +159,13 @@ class StatefulStrategy(Strategy):
             elif power > 1:
                 self._suspected_sovereign[fid] = -100.0  # definitely NOT sovereign
 
-    def _get_likely_sovereign_id(self, player_id: str, game_state: GameState) -> Optional[str]:
+    def _get_likely_sovereign_id(self, player_id: str, game_state: GameState) -> str | None:
         """Return the enemy force most likely to be the sovereign."""
         opponent = game_state.get_opponent(player_id)
         if not opponent:
             return None
         alive_ids = {f.id for f in opponent.get_alive_forces()}
-        candidates = {fid: score for fid, score in self._suspected_sovereign.items()
-                      if fid in alive_ids}
+        candidates = {fid: score for fid, score in self._suspected_sovereign.items() if fid in alive_ids}
         if not candidates:
             return None
         return max(candidates, key=candidates.get)
@@ -178,16 +183,17 @@ class PatternReaderStrategy(StatefulStrategy):
     This tests whether the game creates readable patterns — the
     foundation of the human skill of "reading" opponents.
     """
+
     name = "pattern_reader"
 
-    def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
+    def deploy(self, player: Player, rng: random.Random) -> dict[str, int]:
         ids = [f.id for f in player.forces]
         # Sovereign in non-standard position (not always middle)
         # This makes US harder to read
         powers = [4, 1, 5, 3, 2]
-        return dict(zip(ids, powers))
+        return dict(zip(ids, powers, strict=False))
 
-    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> list[Order]:
         self._observe(player_id, game_state)
 
         player = game_state.get_player_by_id(player_id)
@@ -206,20 +212,24 @@ class PatternReaderStrategy(StatefulStrategy):
 
         for force in player.get_alive_forces():
             enemies = _visible_enemies(force, player_id, game_state, max_range=2)
-            enemies_adj = [e for e in enemies
-                           if hex_distance(force.position[0], force.position[1],
-                                           e.position[0], e.position[1]) <= 1]
+            enemies_adj = [
+                e
+                for e in enemies
+                if hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]) <= 1
+            ]
 
             # Sovereign: flee + fortify, prefer staying behind our front line
             if force.is_sovereign:
                 if enemies_adj:
-                    nearest = min(enemies_adj, key=lambda e: hex_distance(
-                        force.position[0], force.position[1],
-                        e.position[0], e.position[1]))
+                    nearest = min(
+                        enemies_adj,
+                        key=lambda e: hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]),
+                    )
                     moves = _valid_moves(force, game_state)
                     if moves:
-                        best = max(moves, key=lambda m: hex_distance(
-                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        best = max(
+                            moves, key=lambda m: hex_distance(m[0], m[1], nearest.position[0], nearest.position[1])
+                        )
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                         continue
                 elif enemies and _can_order(force, player, OrderType.FORTIFY):
@@ -233,8 +243,7 @@ class PatternReaderStrategy(StatefulStrategy):
 
             # HUNT MODE: if we have a likely sovereign target, send strong forces
             if likely_sov_pos and force.power and force.power >= 4:
-                dist = hex_distance(force.position[0], force.position[1],
-                                    likely_sov_pos[0], likely_sov_pos[1])
+                dist = hex_distance(force.position[0], force.position[1], likely_sov_pos[0], likely_sov_pos[1])
                 if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
                     orders.append(Order(OrderType.CHARGE, force, target_hex=likely_sov_pos))
                     continue
@@ -247,21 +256,23 @@ class PatternReaderStrategy(StatefulStrategy):
                     continue
 
             # PROBE MODE: low power forces advance to create retreat patterns
-            if force.power and force.power <= 3:
-                # Move toward nearest enemy to force them to reveal behavior
-                if enemies:
-                    nearest = min(enemies, key=lambda e: hex_distance(
-                        force.position[0], force.position[1],
-                        e.position[0], e.position[1]))
-                    # Don't charge in — just get adjacent to observe response
-                    best = _move_toward(force, nearest.position, game_state)
-                    if best:
-                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                        continue
+            if force.power and force.power <= 3 and enemies:
+                nearest = min(
+                    enemies,
+                    key=lambda e: hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]),
+                )
+                # Don't charge in — just get adjacent to observe response
+                best = _move_toward(force, nearest.position, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                    continue
 
             # Default: advance toward contentious
-            target = min(contentious, key=lambda c: hex_distance(
-                force.position[0], force.position[1], c[0], c[1])) if contentious else center
+            target = (
+                min(contentious, key=lambda c: hex_distance(force.position[0], force.position[1], c[0], c[1]))
+                if contentious
+                else center
+            )
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
@@ -285,15 +296,16 @@ class SupplyCutterStrategy(StatefulStrategy):
     or just decoration. If supply cutting wins games, the mechanic
     has depth we haven't been measuring.
     """
+
     name = "supply_cutter"
 
-    def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
+    def deploy(self, player: Player, rng: random.Random) -> dict[str, int]:
         ids = [f.id for f in player.forces]
         # Sovereign protected at position 1 (non-standard)
         powers = [3, 1, 4, 5, 2]
-        return dict(zip(ids, powers))
+        return dict(zip(ids, powers, strict=False))
 
-    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> list[Order]:
         self._observe(player_id, game_state)
 
         player = game_state.get_player_by_id(player_id)
@@ -327,20 +339,24 @@ class SupplyCutterStrategy(StatefulStrategy):
                 continue
 
             enemies = _visible_enemies(force, player_id, game_state, max_range=2)
-            enemies_adj = [e for e in enemies
-                           if hex_distance(force.position[0], force.position[1],
-                                           e.position[0], e.position[1]) <= 1]
+            enemies_adj = [
+                e
+                for e in enemies
+                if hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]) <= 1
+            ]
 
             # Sovereign: flee, fortify, stay protected
             if force.is_sovereign:
                 if enemies_adj:
-                    nearest = min(enemies_adj, key=lambda e: hex_distance(
-                        force.position[0], force.position[1],
-                        e.position[0], e.position[1]))
+                    nearest = min(
+                        enemies_adj,
+                        key=lambda e: hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]),
+                    )
                     moves = _valid_moves(force, game_state)
                     if moves:
-                        best = max(moves, key=lambda m: hex_distance(
-                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        best = max(
+                            moves, key=lambda m: hex_distance(m[0], m[1], nearest.position[0], nearest.position[1])
+                        )
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                         ordered_forces.add(force.id)
                         continue
@@ -356,27 +372,24 @@ class SupplyCutterStrategy(StatefulStrategy):
 
             # SUPPLY CUT MODE: mid-power forces (2-3) try to interpose
             # between enemy sovereign and enemy outlying forces
-            if force.power and force.power in (2, 3) and enemy_sov_pos:
-                # Target: hexes between enemy sovereign and enemy centroid
-                if enemy_centroid:
-                    interpose_q = (enemy_sov_pos[0] + enemy_centroid[0]) / 2
-                    interpose_r = (enemy_sov_pos[1] + enemy_centroid[1]) / 2
-                    interpose_target = (round(interpose_q), round(interpose_r))
+            if force.power and force.power in (2, 3) and enemy_sov_pos and enemy_centroid:
+                interpose_q = (enemy_sov_pos[0] + enemy_centroid[0]) / 2
+                interpose_r = (enemy_sov_pos[1] + enemy_centroid[1]) / 2
+                interpose_target = (round(interpose_q), round(interpose_r))
 
-                    # Move toward interposition point
-                    best = _move_toward(force, interpose_target, game_state)
-                    if best:
-                        orders.append(Order(OrderType.MOVE, force, target_hex=best))
-                        ordered_forces.add(force.id)
-                        continue
+                # Move toward interposition point
+                best = _move_toward(force, interpose_target, game_state)
+                if best:
+                    orders.append(Order(OrderType.MOVE, force, target_hex=best))
+                    ordered_forces.add(force.id)
+                    continue
 
             # STRIKE MODE: strong forces (4-5) attack supply-cut enemies
             # or hunt the sovereign
             if force.power and force.power >= 4:
                 # Priority: attack enemy sovereign if known
                 if enemy_sov_pos:
-                    dist = hex_distance(force.position[0], force.position[1],
-                                        enemy_sov_pos[0], enemy_sov_pos[1])
+                    dist = hex_distance(force.position[0], force.position[1], enemy_sov_pos[0], enemy_sov_pos[1])
                     if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
                         orders.append(Order(OrderType.CHARGE, force, target_hex=enemy_sov_pos))
                         ordered_forces.add(force.id)
@@ -403,8 +416,11 @@ class SupplyCutterStrategy(StatefulStrategy):
                         continue
 
             # Default: advance toward contentious
-            target = min(contentious, key=lambda c: hex_distance(
-                force.position[0], force.position[1], c[0], c[1])) if contentious else center
+            target = (
+                min(contentious, key=lambda c: hex_distance(force.position[0], force.position[1], c[0], c[1]))
+                if contentious
+                else center
+            )
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
@@ -417,6 +433,7 @@ class SupplyCutterStrategy(StatefulStrategy):
 # ===========================================================================
 # TIER 3: INFORMATION-THEORETIC — Bayesian Belief Tracking
 # ===========================================================================
+
 
 class BayesianHunterStrategy(StatefulStrategy):
     """
@@ -439,19 +456,20 @@ class BayesianHunterStrategy(StatefulStrategy):
     strategic depth — whether REASONING about uncertainty beats
     acting on partial knowledge.
     """
+
     name = "bayesian_hunter"
 
     def __init__(self):
         super().__init__()
-        self._belief: Optional[List[Dict[str, int]]] = None
-        self._enemy_force_ids: Optional[List[str]] = None
+        self._belief: list[dict[str, int]] | None = None
+        self._enemy_force_ids: list[str] | None = None
 
     def _init_beliefs(self, opponent: Player):
         """Initialize all 120 possible power assignments."""
         self._enemy_force_ids = [f.id for f in opponent.forces]
         self._belief = []
         for perm in itertools.permutations([1, 2, 3, 4, 5]):
-            assignment = dict(zip(self._enemy_force_ids, perm))
+            assignment = dict(zip(self._enemy_force_ids, perm, strict=False))
             self._belief.append(assignment)
 
     def _update_beliefs(self, player: Player, opponent: Player):
@@ -461,11 +479,7 @@ class BayesianHunterStrategy(StatefulStrategy):
 
         # Filter by known powers (from scouting + combat)
         known = player.known_enemy_powers
-        self._belief = [
-            b for b in self._belief
-            if all(b.get(fid) == power for fid, power in known.items()
-                   if fid in b)
-        ]
+        self._belief = [b for b in self._belief if all(b.get(fid) == power for fid, power in known.items() if fid in b)]
 
         # Safety: if all filtered out (shouldn't happen), reset
         if not self._belief:
@@ -523,13 +537,13 @@ class BayesianHunterStrategy(StatefulStrategy):
         # Weighted blend: Bayesian reasoning is primary, patterns supplement
         return 0.6 * bayes_prob + 0.4 * pattern_norm
 
-    def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
+    def deploy(self, player: Player, rng: random.Random) -> dict[str, int]:
         ids = [f.id for f in player.forces]
         # Non-standard deployment: sovereign in position 4 (unexpected)
         powers = [5, 3, 4, 1, 2]
-        return dict(zip(ids, powers))
+        return dict(zip(ids, powers, strict=False))
 
-    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> list[Order]:
         self._observe(player_id, game_state)
 
         player = game_state.get_player_by_id(player_id)
@@ -549,20 +563,24 @@ class BayesianHunterStrategy(StatefulStrategy):
 
         for force in player.get_alive_forces():
             enemies = _visible_enemies(force, player_id, game_state, max_range=2)
-            enemies_adj = [e for e in enemies
-                           if hex_distance(force.position[0], force.position[1],
-                                           e.position[0], e.position[1]) <= 1]
+            enemies_adj = [
+                e
+                for e in enemies
+                if hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]) <= 1
+            ]
 
             # Sovereign: retreat + fortify
             if force.is_sovereign:
                 if enemies_adj:
-                    nearest = min(enemies_adj, key=lambda e: hex_distance(
-                        force.position[0], force.position[1],
-                        e.position[0], e.position[1]))
+                    nearest = min(
+                        enemies_adj,
+                        key=lambda e: hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]),
+                    )
                     moves = _valid_moves(force, game_state)
                     if moves:
-                        best = max(moves, key=lambda m: hex_distance(
-                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        best = max(
+                            moves, key=lambda m: hex_distance(m[0], m[1], nearest.position[0], nearest.position[1])
+                        )
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                         continue
                 elif enemies and _can_order(force, player, OrderType.FORTIFY):
@@ -589,16 +607,16 @@ class BayesianHunterStrategy(StatefulStrategy):
                     sov_p = self._combined_sovereign_score(e.id)
                     exp_power = self._expected_power(e.id)
                     score = sov_p * 10.0 - exp_power * 0.5
-                    dist = hex_distance(force.position[0], force.position[1],
-                                        e.position[0], e.position[1])
+                    dist = hex_distance(force.position[0], force.position[1], e.position[0], e.position[1])
                     score -= dist * 0.5
                     if score > best_score:
                         best_score = score
                         best_target = e
 
                 if best_target and best_score > 0:
-                    dist = hex_distance(force.position[0], force.position[1],
-                                        best_target.position[0], best_target.position[1])
+                    dist = hex_distance(
+                        force.position[0], force.position[1], best_target.position[0], best_target.position[1]
+                    )
                     if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
                         orders.append(Order(OrderType.CHARGE, force, target_hex=best_target.position))
                         continue
@@ -625,8 +643,7 @@ class BayesianHunterStrategy(StatefulStrategy):
                 if force.power and exp > force.power + 1:
                     moves = _valid_moves(force, game_state)
                     if moves:
-                        best = max(moves, key=lambda m: hex_distance(
-                            m[0], m[1], e.position[0], e.position[1]))
+                        best = max(moves, key=lambda m: hex_distance(m[0], m[1], e.position[0], e.position[1]))
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                         retreated = True
                         break
@@ -635,16 +652,18 @@ class BayesianHunterStrategy(StatefulStrategy):
 
             # Default: advance toward high-sov-probability enemy or contentious
             if alive_enemies:
-                sov_target = max(alive_enemies,
-                                 key=lambda e: self._combined_sovereign_score(e.id))
+                sov_target = max(alive_enemies, key=lambda e: self._combined_sovereign_score(e.id))
                 if self._combined_sovereign_score(sov_target.id) > 0.3:
                     best = _move_toward(force, sov_target.position, game_state)
                     if best:
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                         continue
 
-            target = min(contentious, key=lambda c: hex_distance(
-                force.position[0], force.position[1], c[0], c[1])) if contentious else center
+            target = (
+                min(contentious, key=lambda c: hex_distance(force.position[0], force.position[1], c[0], c[1]))
+                if contentious
+                else center
+            )
             best = _move_toward(force, target, game_state)
             if best:
                 orders.append(Order(OrderType.MOVE, force, target_hex=best))
@@ -658,12 +677,13 @@ class BayesianHunterStrategy(StatefulStrategy):
 # TIER 4: SEARCH-BASED — Forward Simulation with Belief Sampling
 # ===========================================================================
 
+
 def _clone_game_state(game_state: GameState) -> GameState:
     """Deep-copy game state for forward simulation."""
     return copy.deepcopy(game_state)
 
 
-def _simple_opponent_orders(opponent: Player, game_state: GameState) -> List[Order]:
+def _simple_opponent_orders(opponent: Player, game_state: GameState) -> list[Order]:
     """Generate plausible opponent orders for forward simulation.
 
     Uses a simple heuristic: advance toward center, protect sovereign,
@@ -682,19 +702,22 @@ def _simple_opponent_orders(opponent: Player, game_state: GameState) -> List[Ord
             enemies = []
             other_player = game_state.get_opponent(opponent.id)
             if other_player:
-                enemies = [f for f in other_player.get_alive_forces()
-                           if hex_distance(force.position[0], force.position[1],
-                                           f.position[0], f.position[1]) <= 2]
+                enemies = [
+                    f
+                    for f in other_player.get_alive_forces()
+                    if hex_distance(force.position[0], force.position[1], f.position[0], f.position[1]) <= 2
+                ]
             if enemies:
-                nearest = min(enemies, key=lambda e: hex_distance(
-                    force.position[0], force.position[1],
-                    e.position[0], e.position[1]))
-                if hex_distance(force.position[0], force.position[1],
-                                nearest.position[0], nearest.position[1]) <= 1:
+                nearest = min(
+                    enemies,
+                    key=lambda e: hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]),
+                )
+                if hex_distance(force.position[0], force.position[1], nearest.position[0], nearest.position[1]) <= 1:
                     moves = _valid_moves(force, game_state)
                     if moves:
-                        best = max(moves, key=lambda m: hex_distance(
-                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        best = max(
+                            moves, key=lambda m: hex_distance(m[0], m[1], nearest.position[0], nearest.position[1])
+                        )
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                         continue
             best = _move_toward(force, center, game_state)
@@ -703,8 +726,11 @@ def _simple_opponent_orders(opponent: Player, game_state: GameState) -> List[Ord
             continue
 
         # Non-sovereign: move toward contentious
-        target = min(contentious, key=lambda c: hex_distance(
-            force.position[0], force.position[1], c[0], c[1])) if contentious else center
+        target = (
+            min(contentious, key=lambda c: hex_distance(force.position[0], force.position[1], c[0], c[1]))
+            if contentious
+            else center
+        )
         best = _move_toward(force, target, game_state)
         if best:
             orders.append(Order(OrderType.MOVE, force, target_hex=best))
@@ -753,10 +779,8 @@ def _evaluate_state(game_state: GameState, my_player_id: str) -> float:
 
     # Territory: contentious hex control
     contentious = _contentious_hexes(game_state)
-    my_cont = sum(1 for c in contentious
-                  if any(f.position == c for f in my_alive))
-    opp_cont = sum(1 for c in contentious
-                   if any(f.position == c for f in opp_alive))
+    my_cont = sum(1 for c in contentious if any(f.position == c for f in my_alive))
+    opp_cont = sum(1 for c in contentious if any(f.position == c for f in opp_alive))
     score += (my_cont - opp_cont) * 2.0
 
     # Domination progress
@@ -767,16 +791,13 @@ def _evaluate_state(game_state: GameState, my_player_id: str) -> float:
     my_sov = next((f for f in my_alive if f.is_sovereign), None)
     if my_sov:
         nearest_enemy_dist = min(
-            (hex_distance(my_sov.position[0], my_sov.position[1],
-                          e.position[0], e.position[1])
-             for e in opp_alive),
-            default=10
+            (hex_distance(my_sov.position[0], my_sov.position[1], e.position[0], e.position[1]) for e in opp_alive),
+            default=10,
         )
         score += min(nearest_enemy_dist, 4) * 2.5  # safer sovereign = better (v9: increased weight)
 
     # Information advantage: how many enemy powers we know
-    known_count = sum(1 for fid in player.known_enemy_powers
-                      if any(f.id == fid and f.alive for f in opponent.forces))
+    known_count = sum(1 for fid in player.known_enemy_powers if any(f.id == fid and f.alive for f in opponent.forces))
     score += known_count * 0.5
 
     # Resource advantage
@@ -805,13 +826,14 @@ class LookaheadStrategy(BayesianHunterStrategy):
     baseline (Bayesian logic), aggressive variant, defensive variant.
     Evaluates each as a COMPLETE set of orders across belief samples.
     """
+
     name = "lookahead"
 
     def __init__(self, n_samples: int = 8):
         super().__init__()
         self._n_samples = n_samples
 
-    def _sample_beliefs(self, n: int) -> List[Dict[str, int]]:
+    def _sample_beliefs(self, n: int) -> list[dict[str, int]]:
         """Sample n power assignments from current beliefs."""
         if not self._belief:
             return []
@@ -819,8 +841,9 @@ class LookaheadStrategy(BayesianHunterStrategy):
             return list(self._belief)
         return random.sample(self._belief, n)
 
-    def _generate_aggressive_variant(self, player_id: str, game_state: GameState,
-                                     rng: random.Random) -> Optional[List[Order]]:
+    def _generate_aggressive_variant(
+        self, player_id: str, game_state: GameState, rng: random.Random
+    ) -> list[Order] | None:
         """Generate an aggressive plan: charge/move toward enemies."""
         player = game_state.get_player_by_id(player_id)
         opponent = game_state.get_opponent(player_id)
@@ -833,24 +856,29 @@ class LookaheadStrategy(BayesianHunterStrategy):
             return None
 
         # Find best sovereign target using combined score
-        sov_target = max(alive_enemies,
-                         key=lambda e: self._combined_sovereign_score(e.id))
+        sov_target = max(alive_enemies, key=lambda e: self._combined_sovereign_score(e.id))
         sov_pos = sov_target.position
 
         for force in player.get_alive_forces():
             if force.is_sovereign:
                 # Even aggressive plan protects sovereign
-                enemies_adj = [e for e in alive_enemies
-                               if hex_distance(force.position[0], force.position[1],
-                                               e.position[0], e.position[1]) <= 1]
+                enemies_adj = [
+                    e
+                    for e in alive_enemies
+                    if hex_distance(force.position[0], force.position[1], e.position[0], e.position[1]) <= 1
+                ]
                 if enemies_adj:
                     moves = _valid_moves(force, game_state)
                     if moves:
-                        nearest = min(enemies_adj, key=lambda e: hex_distance(
-                            force.position[0], force.position[1],
-                            e.position[0], e.position[1]))
-                        best = max(moves, key=lambda m: hex_distance(
-                            m[0], m[1], nearest.position[0], nearest.position[1]))
+                        nearest = min(
+                            enemies_adj,
+                            key=lambda e: hex_distance(
+                                force.position[0], force.position[1], e.position[0], e.position[1]
+                            ),
+                        )
+                        best = max(
+                            moves, key=lambda m: hex_distance(m[0], m[1], nearest.position[0], nearest.position[1])
+                        )
                         orders.append(Order(OrderType.MOVE, force, target_hex=best))
                         continue
                 elif _can_order(force, player, OrderType.FORTIFY):
@@ -862,8 +890,7 @@ class LookaheadStrategy(BayesianHunterStrategy):
                 continue
 
             # Aggressive: charge if possible, otherwise move toward sovereign target
-            dist = hex_distance(force.position[0], force.position[1],
-                                sov_pos[0], sov_pos[1])
+            dist = hex_distance(force.position[0], force.position[1], sov_pos[0], sov_pos[1])
             if dist <= 2 and _can_order(force, player, OrderType.CHARGE):
                 orders.append(Order(OrderType.CHARGE, force, target_hex=sov_pos))
                 continue
@@ -876,8 +903,9 @@ class LookaheadStrategy(BayesianHunterStrategy):
 
         return orders if orders else None
 
-    def _generate_defensive_variant(self, player_id: str, game_state: GameState,
-                                    rng: random.Random) -> Optional[List[Order]]:
+    def _generate_defensive_variant(
+        self, player_id: str, game_state: GameState, rng: random.Random
+    ) -> list[Order] | None:
         """Generate a defensive plan: fortify on contentious hexes, scout enemies."""
         player = game_state.get_player_by_id(player_id)
         opponent = game_state.get_opponent(player_id)
@@ -915,8 +943,7 @@ class LookaheadStrategy(BayesianHunterStrategy):
                 continue
 
             if contentious:
-                target = min(contentious, key=lambda c: hex_distance(
-                    force.position[0], force.position[1], c[0], c[1]))
+                target = min(contentious, key=lambda c: hex_distance(force.position[0], force.position[1], c[0], c[1]))
             else:
                 target = center
             best = _move_toward(force, target, game_state)
@@ -927,9 +954,9 @@ class LookaheadStrategy(BayesianHunterStrategy):
 
         return orders if orders else None
 
-    def _simulate_full_plan(self, plan: List[Order], player_id: str,
-                            game_state: GameState,
-                            belief_sample: Dict[str, int]) -> float:
+    def _simulate_full_plan(
+        self, plan: list[Order], player_id: str, game_state: GameState, belief_sample: dict[str, int]
+    ) -> float:
         """Simulate a complete plan and return evaluation score.
 
         v9 fix: evaluates ALL orders together instead of per-force.
@@ -951,16 +978,19 @@ class LookaheadStrategy(BayesianHunterStrategy):
             for order in plan:
                 cloned_force = player.get_force_by_id(order.force.id) if player else None
                 if cloned_force and cloned_force.alive:
-                    cloned_orders.append(Order(
-                        order.order_type, cloned_force,
-                        target_hex=order.target_hex,
-                        scout_target_id=order.scout_target_id,
-                    ))
+                    cloned_orders.append(
+                        Order(
+                            order.order_type,
+                            cloned_force,
+                            target_hex=order.target_hex,
+                            scout_target_id=order.scout_target_id,
+                        )
+                    )
 
             # Generate opponent orders
             opp_orders = _simple_opponent_orders(opponent, clone) if opponent else []
 
-            if player_id == 'p1':
+            if player_id == "p1":
                 p1_orders, p2_orders = cloned_orders, opp_orders
             else:
                 p1_orders, p2_orders = opp_orders, cloned_orders
@@ -972,14 +1002,14 @@ class LookaheadStrategy(BayesianHunterStrategy):
                 sov = next((f for f in p.forces if f.power == 1), None)
                 if sov and not sov.alive:
                     opp = clone.get_opponent(p.id)
-                    sov_captured = {'winner': opp.id if opp else None}
+                    sov_captured = {"winner": opp.id if opp else None}
 
             perform_upkeep(clone, sov_captured)
             return _evaluate_state(clone, player_id)
         except Exception:
             return 0.0
 
-    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> List[Order]:
+    def plan(self, player_id: str, game_state: GameState, rng: random.Random) -> list[Order]:
         """Whole-turn plan evaluation: compare 3 candidate plans across belief samples."""
         self._observe(player_id, game_state)
 
@@ -1009,10 +1039,7 @@ class LookaheadStrategy(BayesianHunterStrategy):
         best_score = -9999.0
 
         for candidate in candidates:
-            total = sum(
-                self._simulate_full_plan(candidate, player_id, game_state, s)
-                for s in samples
-            )
+            total = sum(self._simulate_full_plan(candidate, player_id, game_state, s) for s in samples)
             avg = total / len(samples)
             if avg > best_score:
                 best_score = avg

@@ -7,16 +7,15 @@ v9: Wider starting separation.
 """
 
 import random
-from typing import Dict, Tuple, List, Optional
-from models import Hex
 
+from models import Hex
 
 BOARD_SIZE = 7
 CENTER_Q = BOARD_SIZE // 2  # 3
 CENTER_R = BOARD_SIZE // 2  # 3
 
 
-def get_hex_neighbors(q: int, r: int) -> List[Tuple[int, int]]:
+def get_hex_neighbors(q: int, r: int) -> list[tuple[int, int]]:
     """Get the 6 neighboring hex coordinates in axial system."""
     directions = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]
     return [(q + dq, r + dr) for dq, dr in directions]
@@ -61,20 +60,20 @@ def is_scorched(q: int, r: int, shrink_stage: int) -> bool:
 
 
 def a_star_path(
-    start: Tuple[int, int],
-    goal: Tuple[int, int],
-    map_data: Dict[Tuple[int, int], Hex],
-    avoid_terrain: Optional[str] = None,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+    map_data: dict[tuple[int, int], Hex],
+    avoid_terrain: str | None = None,
     size: int = BOARD_SIZE,
-) -> Optional[List[Tuple[int, int]]]:
+) -> list[tuple[int, int]] | None:
     """A* pathfinding on the hex grid."""
     open_set = {start}
-    came_from: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    came_from: dict[tuple[int, int], tuple[int, int]] = {}
     g_score = {start: 0}
     f_score = {start: hex_distance(start[0], start[1], goal[0], goal[1])}
 
     while open_set:
-        current = min(open_set, key=lambda x: f_score.get(x, float('inf')))
+        current = min(open_set, key=lambda x: f_score.get(x, float("inf")))
         if current == goal:
             path = []
             while current in came_from:
@@ -88,7 +87,7 @@ def a_star_path(
         for nq, nr in get_hex_neighbors(current[0], current[1]):
             if not is_valid_hex(nq, nr, size):
                 continue
-            if (nq, nr) in map_data and map_data[(nq, nr)].terrain == 'Scorched':
+            if (nq, nr) in map_data and map_data[(nq, nr)].terrain == "Scorched":
                 continue
             if avoid_terrain and (nq, nr) in map_data and map_data[(nq, nr)].terrain == avoid_terrain:
                 continue
@@ -102,7 +101,7 @@ def a_star_path(
     return None
 
 
-def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex]:
+def generate_map(seed: int, size: int = BOARD_SIZE) -> dict[tuple[int, int], Hex]:
     """
     Generate a 7x7 hex map.
 
@@ -115,10 +114,10 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
     random.seed(seed)
 
     # Initialize all hexes as Open
-    map_data: Dict[Tuple[int, int], Hex] = {}
+    map_data: dict[tuple[int, int], Hex] = {}
     for q in range(size):
         for r in range(size):
-            map_data[(q, r)] = Hex(q=q, r=r, terrain='Open')
+            map_data[(q, r)] = Hex(q=q, r=r, terrain="Open")
 
     # Starting positions: cluster centers for path balance
     p1_start = (0, 2)
@@ -140,7 +139,7 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
     random.shuffle(center_candidates)
     contentious_hexes = center_candidates[:3]
     for pos in contentious_hexes:
-        map_data[pos].terrain = 'Contentious'
+        map_data[pos].terrain = "Contentious"
 
     # Protect starting positions from becoming Difficult
     protected: set = set()
@@ -151,10 +150,7 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
         protected.add(pos)
 
     # Scatter Difficult terrain: ~20-25% of non-protected hexes
-    open_hexes = [
-        pos for pos in map_data
-        if pos not in protected and map_data[pos].terrain == 'Open'
-    ]
+    open_hexes = [pos for pos in map_data if pos not in protected and map_data[pos].terrain == "Open"]
     random.shuffle(open_hexes)
     num_difficult = max(4, min(10, len(open_hexes) // 4))
     difficult_placed = 0
@@ -163,17 +159,17 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
         if difficult_placed >= num_difficult:
             break
         # Don't block ALL paths — ensure A* still works after placement
-        map_data[pos].terrain = 'Difficult'
+        map_data[pos].terrain = "Difficult"
         # Verify both players can still reach all contentious hexes
         blocked = False
         for ch in contentious_hexes:
-            p1_path = a_star_path(p1_start, ch, map_data, 'Difficult', size)
-            p2_path = a_star_path(p2_start, ch, map_data, 'Difficult', size)
+            p1_path = a_star_path(p1_start, ch, map_data, "Difficult", size)
+            p2_path = a_star_path(p2_start, ch, map_data, "Difficult", size)
             if p1_path is None or p2_path is None:
                 blocked = True
                 break
         if blocked:
-            map_data[pos].terrain = 'Open'  # Revert
+            map_data[pos].terrain = "Open"  # Revert
         else:
             difficult_placed += 1
 
@@ -181,18 +177,17 @@ def generate_map(seed: int, size: int = BOARD_SIZE) -> Dict[Tuple[int, int], Hex
     for _ in range(5):
         balanced = True
         for ch in contentious_hexes:
-            p1_path = a_star_path(p1_start, ch, map_data, 'Difficult', size)
-            p2_path = a_star_path(p2_start, ch, map_data, 'Difficult', size)
-            if p1_path and p2_path:
-                if abs(len(p1_path) - len(p2_path)) > 1:
-                    balanced = False
-                    break
+            p1_path = a_star_path(p1_start, ch, map_data, "Difficult", size)
+            p2_path = a_star_path(p2_start, ch, map_data, "Difficult", size)
+            if p1_path and p2_path and abs(len(p1_path) - len(p2_path)) > 1:
+                balanced = False
+                break
         if balanced:
             break
         # If unbalanced, remove a random Difficult hex and try again
-        diff_hexes = [pos for pos in map_data if map_data[pos].terrain == 'Difficult']
+        diff_hexes = [pos for pos in map_data if map_data[pos].terrain == "Difficult"]
         if diff_hexes:
             remove = random.choice(diff_hexes)
-            map_data[remove].terrain = 'Open'
+            map_data[remove].terrain = "Open"
 
     return map_data

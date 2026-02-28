@@ -8,22 +8,25 @@ Usage: python play_cli.py
 """
 
 import random
-import sys
 
-from state import initialize_game, apply_deployment, GameState, is_visible_to_player, load_config
-from orders import Order, OrderType, resolve_orders, has_supply, ORDER_COSTS, _load_order_config
-from upkeep import perform_upkeep
-from map_gen import hex_distance, get_hex_neighbors, BOARD_SIZE
-from models import Force, Player, SOVEREIGN_POWER
+from map_gen import BOARD_SIZE, hex_distance
+from orders import ORDER_COSTS, Order, OrderType, _load_order_config, has_supply, resolve_orders
+from state import GameState, apply_deployment, initialize_game, is_visible_to_player, load_config
 from tests.simulate import (
-    Strategy, ALL_STRATEGIES,
-    AggressiveStrategy, CautiousStrategy, BlitzerStrategy,
-    SovereignHunterStrategy, CoordinatorStrategy,
+    AggressiveStrategy,
+    BlitzerStrategy,
+    CautiousStrategy,
+    CoordinatorStrategy,
+    SovereignHunterStrategy,
+    Strategy,
 )
 from tests.strategies_advanced import (
-    PatternReaderStrategy, SupplyCutterStrategy,
-    BayesianHunterStrategy, LookaheadStrategy,
+    BayesianHunterStrategy,
+    LookaheadStrategy,
+    PatternReaderStrategy,
+    SupplyCutterStrategy,
 )
+from upkeep import perform_upkeep
 
 MAX_TURNS = 30
 
@@ -40,10 +43,10 @@ AVAILABLE_STRATEGIES = [
 ]
 
 TERRAIN_CHAR = {
-    'Open': '.',
-    'Difficult': '#',
-    'Contentious': '*',
-    'Scorched': 'X',
+    "Open": ".",
+    "Difficult": "#",
+    "Contentious": "*",
+    "Scorched": "X",
 }
 
 
@@ -51,21 +54,22 @@ TERRAIN_CHAR = {
 # ASCII Hex Renderer
 # ---------------------------------------------------------------------------
 
+
 def render_board(game: GameState, player_id: str):
     """Render the board from a player's perspective with fog of war."""
     config = load_config()
-    vis_range = config.get('visibility_range', 2)
+    vis_range = config.get("visibility_range", 2)
     player = game.get_player_by_id(player_id)
     opponent = game.get_opponent(player_id)
 
     # Build lookup: position -> display character
     display = {}
     for pos, h in game.map_data.items():
-        display[pos] = TERRAIN_CHAR.get(h.terrain, '.')
+        display[pos] = TERRAIN_CHAR.get(h.terrain, ".")
 
     # Own forces: show power number
     for f in player.get_alive_forces():
-        display[f.position] = str(f.power) if f.power else '?'
+        display[f.position] = str(f.power) if f.power else "?"
 
     # Enemy forces: show '?' or scouted power if visible
     if opponent:
@@ -76,7 +80,7 @@ def render_board(game: GameState, player_id: str):
                 elif f.id in player.known_enemy_powers:
                     display[f.position] = str(player.known_enemy_powers[f.id])
                 else:
-                    display[f.position] = '?'
+                    display[f.position] = "?"
 
     # Print the grid row by row with offset for hex effect
     print()
@@ -87,7 +91,7 @@ def render_board(game: GameState, player_id: str):
         offset = "  " if r % 2 == 0 else " "
         row_chars = []
         for q in range(BOARD_SIZE):
-            row_chars.append(display.get((q, r), ' '))
+            row_chars.append(display.get((q, r), " "))
         print(f"  {r} {offset}" + "  ".join(row_chars))
     print()
 
@@ -95,6 +99,7 @@ def render_board(game: GameState, player_id: str):
 # ---------------------------------------------------------------------------
 # Deploy Phase
 # ---------------------------------------------------------------------------
+
 
 def deploy_human(game: GameState, player_id: str):
     """Interactive deployment: assign powers 1-5 to forces."""
@@ -120,11 +125,11 @@ def deploy_human(game: GameState, player_id: str):
         assignments = {}
         ok = True
         for part in parts:
-            if '=' not in part:
+            if "=" not in part:
                 print(f"  Bad token: {part}  (expected fN=P)")
                 ok = False
                 break
-            key, val = part.split('=', 1)
+            key, val = part.split("=", 1)
             force_id = f"{player_id}_{key}"
             try:
                 power = int(val)
@@ -162,15 +167,16 @@ def deploy_ai(game: GameState, ai_player_id: str, strategy: Strategy, rng: rando
 # Order Phase
 # ---------------------------------------------------------------------------
 
+
 def show_status(game: GameState, player_id: str):
     """Show turn info, Shih, domination, known enemy powers, and force details."""
     player = game.get_player_by_id(player_id)
     opponent = game.get_opponent(player_id)
     config = load_config()
-    vis_range = config.get('visibility_range', 2)
+    vis_range = config.get("visibility_range", 2)
     order_cfg = _load_order_config()
-    supply_range = order_cfg['supply_range']
-    max_hops = order_cfg['max_supply_hops']
+    supply_range = order_cfg["supply_range"]
+    max_hops = order_cfg["max_supply_hops"]
 
     print(f"\n=== TURN {game.turn} ===")
     print(f"  Your Shih: {player.shih}    Enemy Shih: {opponent.shih if opponent else '?'}")
@@ -183,8 +189,10 @@ def show_status(game: GameState, player_id: str):
         print(f"  Known enemy powers: {known}")
 
     # Order costs reminder
-    print(f"  Costs: Scout={ORDER_COSTS[OrderType.SCOUT]}, Fortify={ORDER_COSTS[OrderType.FORTIFY]}, "
-          f"Ambush={ORDER_COSTS[OrderType.AMBUSH]}, Charge={ORDER_COSTS[OrderType.CHARGE]}, Move=free")
+    print(
+        f"  Costs: Scout={ORDER_COSTS[OrderType.SCOUT]}, Fortify={ORDER_COSTS[OrderType.FORTIFY]}, "
+        f"Ambush={ORDER_COSTS[OrderType.AMBUSH]}, Charge={ORDER_COSTS[OrderType.CHARGE]}, Move=free"
+    )
 
     render_board(game, player_id)
 
@@ -246,9 +254,11 @@ def get_human_orders(game: GameState, player_id: str) -> list:
                 if o.force.id not in ordered_forces:
                     orders.append(o)
                     ordered_forces.add(o.force.id)
-                    print(f"  auto: {o.force.id} -> {o.order_type.value}"
-                          f"{' to ' + str(o.target_hex) if o.target_hex else ''}"
-                          f"{' on ' + str(o.scout_target_id) if o.scout_target_id else ''}")
+                    print(
+                        f"  auto: {o.force.id} -> {o.order_type.value}"
+                        f"{' to ' + str(o.target_hex) if o.target_hex else ''}"
+                        f"{' on ' + str(o.scout_target_id) if o.scout_target_id else ''}"
+                    )
             break
 
         tokens = raw.split()
@@ -324,65 +334,65 @@ def get_human_orders(game: GameState, player_id: str) -> list:
 # Resolution Display
 # ---------------------------------------------------------------------------
 
+
 def show_resolution(result: dict, game: GameState, player_id: str):
     """Display what happened during resolution."""
     print("\n--- Resolution ---")
 
     # Movements
-    for mv in result.get('movements', []):
+    for mv in result.get("movements", []):
         print(f"  {mv['force_id']} moved {mv['from']} -> {mv['to']}")
 
     # Combats
-    for cb in result.get('combats', []):
-        att = cb.get('attacker_id', '?')
-        dfn = cb.get('defender_id', '?')
-        att_p = cb.get('attacker_power', '?')
-        def_p = cb.get('defender_power', '?')
-        outcome = cb.get('outcome', '?')
+    for cb in result.get("combats", []):
+        att = cb.get("attacker_id", "?")
+        dfn = cb.get("defender_id", "?")
+        att_p = cb.get("attacker_power", "?")
+        def_p = cb.get("defender_power", "?")
+        outcome = cb.get("outcome", "?")
         print(f"  COMBAT at {cb.get('hex', '?')}: {att}(eff={att_p}) vs {dfn}(eff={def_p})")
-        print(f"    base powers: {cb.get('attacker_base_power','?')} vs {cb.get('defender_base_power','?')}")
-        if 'eliminated' in cb:
+        print(f"    base powers: {cb.get('attacker_base_power', '?')} vs {cb.get('defender_base_power', '?')}")
+        if "eliminated" in cb:
             print(f"    ELIMINATED: {cb['eliminated']}")
-        if 'retreated' in cb:
+        if "retreated" in cb:
             print(f"    retreated: {cb['retreated']} -> {cb.get('retreat_to', '?')}")
-        if outcome == 'stalemate':
-            print(f"    STALEMATE - both retreat")
-        if cb.get('sovereign_captured'):
-            cap = cb['sovereign_captured']
+        if outcome == "stalemate":
+            print("    STALEMATE - both retreat")
+        if cb.get("sovereign_captured"):
+            cap = cb["sovereign_captured"]
             print(f"    *** SOVEREIGN CAPTURED! Winner: {cap['winner']} ***")
 
     # Scouts (only show player's own scouts)
-    for sc in result.get('scouts', []):
-        if sc.get('player') == player_id:
+    for sc in result.get("scouts", []):
+        if sc.get("player") == player_id:
             print(f"  SCOUT: {sc['scouting_force']} reveals {sc['scouted_force']} = power {sc['revealed_power']}")
 
     # Errors
-    for err in result.get('errors', []):
-        if err.get('player') == player_id:
+    for err in result.get("errors", []):
+        if err.get("player") == player_id:
             print(f"  ERROR: {err['force']}: {err['error']}")
 
-    if not any([result.get('movements'), result.get('combats'),
-                result.get('scouts'), result.get('errors')]):
+    if not any([result.get("movements"), result.get("combats"), result.get("scouts"), result.get("errors")]):
         print("  (nothing happened)")
 
 
 def show_upkeep(upkeep: dict, game: GameState, player_id: str):
     """Display upkeep results."""
     # Noose events
-    for evt in upkeep.get('noose_events', []):
-        if evt.get('type') == 'scorched':
+    for evt in upkeep.get("noose_events", []):
+        if evt.get("type") == "scorched":
             print(f"  The Noose scorches hex {evt['hex']}")
-        elif evt.get('type') == 'force_scorched':
-            sov = " (SOVEREIGN!)" if evt.get('was_sovereign') else ""
+        elif evt.get("type") == "force_scorched":
+            sov = " (SOVEREIGN!)" if evt.get("was_sovereign") else ""
             print(f"  {evt['force_id']} consumed by the Noose at {evt['position']}{sov}")
 
     # Shih income
-    for pid, income in upkeep.get('shih_income', {}).items():
+    for pid, income in upkeep.get("shih_income", {}).items():
         tag = "You" if pid == player_id else "Enemy"
         print(f"  {tag} earns {income} Shih")
 
     # Domination
-    for pid, turns in upkeep.get('domination_progress', {}).items():
+    for pid, turns in upkeep.get("domination_progress", {}).items():
         if turns > 0:
             tag = "You" if pid == player_id else "Enemy"
             print(f"  {tag} domination progress: {turns}/3")
@@ -391,6 +401,7 @@ def show_upkeep(upkeep: dict, game: GameState, player_id: str):
 # ---------------------------------------------------------------------------
 # Main Game Loop
 # ---------------------------------------------------------------------------
+
 
 def choose_strategy() -> Strategy:
     """Let the player pick an AI opponent."""
@@ -446,8 +457,8 @@ def main():
         deploy_human(game, human_side)
 
     # --- Game Loop ---
-    while game.phase != 'ended' and game.turn <= MAX_TURNS:
-        if game.phase != 'plan':
+    while game.phase != "ended" and game.turn <= MAX_TURNS:
+        if game.phase != "plan":
             break
 
         # Show status and board
@@ -458,8 +469,8 @@ def main():
         ai_orders = ai_strategy.plan(ai_side, game, rng)
 
         # Resolve
-        game.phase = 'resolve'
-        if human_side == 'p1':
+        game.phase = "resolve"
+        if human_side == "p1":
             result = resolve_orders(human_orders, ai_orders, game)
         else:
             result = resolve_orders(ai_orders, human_orders, game)
@@ -467,16 +478,16 @@ def main():
         show_resolution(result, game, human_side)
 
         # Upkeep
-        sovereign_capture = result.get('sovereign_captured')
+        sovereign_capture = result.get("sovereign_captured")
         upkeep = perform_upkeep(game, sovereign_capture)
         show_upkeep(upkeep, game, human_side)
 
-        if upkeep.get('winner'):
+        if upkeep.get("winner"):
             break
 
     # --- End ---
     print("\n" + "=" * 50)
-    if game.winner == 'draw':
+    if game.winner == "draw":
         print("  RESULT: DRAW (mutual destruction)")
     elif game.winner == human_side:
         print(f"  VICTORY! You win by {game.victory_type}!")
@@ -488,5 +499,5 @@ def main():
     print("=" * 50)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

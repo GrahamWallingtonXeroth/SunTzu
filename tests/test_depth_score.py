@@ -80,28 +80,21 @@ If Tier 2 ≈ Tier 1, the game is too simple for planning to matter.
 """
 
 import math
-import random
-from collections import Counter, defaultdict
-from typing import List, Dict, Tuple
-
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from collections import Counter
 
 from tests.simulate import (
-    run_game, run_tournament, GameRecord,
-    AggressiveStrategy, CautiousStrategy, AmbushStrategy,
-    SovereignHunterStrategy, NooseDodgerStrategy,
-    CoordinatorStrategy, BlitzerStrategy,
-    ALL_STRATEGIES,
+    AggressiveStrategy,
+    BlitzerStrategy,
+    CautiousStrategy,
+    GameRecord,
+    run_game,
 )
 from tests.strategies_advanced import (
-    PatternReaderStrategy, SupplyCutterStrategy,
-    BayesianHunterStrategy, LookaheadStrategy,
-    TIER2_STRATEGIES, TIER3_STRATEGIES, TIER4_STRATEGIES,
+    TIER2_STRATEGIES,
+    TIER3_STRATEGIES,
+    TIER4_STRATEGIES,
 )
 from tests.test_narrative_score import _advantage_series, _classify_game
-
 
 # ---------------------------------------------------------------------------
 # Tier 1 representatives (best 3 from existing competitive strategies)
@@ -127,11 +120,11 @@ def _h2h(s1, s2, n=N_GAMES):
     for i in range(n // 2):
         r = run_game(s1, s2, seed=i, rng_seed=i * 1000)
         total += 1
-        if r.winner == 'p1':
+        if r.winner == "p1":
             wins += 1
         r = run_game(s2, s1, seed=i, rng_seed=i * 1000 + 500)
         total += 1
-        if r.winner == 'p2':
+        if r.winner == "p2":
             wins += 1
     return wins / total if total > 0 else 0.5
 
@@ -142,16 +135,16 @@ def _tier_vs_tier(higher_tier, lower_tier, n=N_GAMES):
     total_games = 0
     matchup_details = []
     for h in higher_tier:
-        for l in lower_tier:
-            rate = _h2h(h, l, n=n)
+        for low in lower_tier:
+            rate = _h2h(h, low, n=n)
             total_wins += rate * n
             total_games += n
-            matchup_details.append((h.name, l.name, rate))
+            matchup_details.append((h.name, low.name, rate))
     avg = total_wins / total_games if total_games > 0 else 0.5
     return avg, matchup_details
 
 
-def _collect_games(strategies_a, strategies_b, n=N_GAMES) -> List[GameRecord]:
+def _collect_games(strategies_a, strategies_b, n=N_GAMES) -> list[GameRecord]:
     """Collect game records from all matchups between two strategy sets."""
     records = []
     for a in strategies_a:
@@ -166,7 +159,8 @@ def _collect_games(strategies_a, strategies_b, n=N_GAMES) -> List[GameRecord]:
 # D1. PLANNING GRADIENT — Does Tier 2 beat Tier 1?
 # ===================================================================
 
-def score_planning_gradient() -> Tuple[float, str]:
+
+def score_planning_gradient() -> tuple[float, str]:
     """
     If memory and pattern recognition beat reactive heuristics,
     the game rewards planning. The gradient should be 55-65%.
@@ -189,7 +183,7 @@ def score_planning_gradient() -> Tuple[float, str]:
     else:
         score = 10.0 - (gap - 0.25) / 0.15 * 2.0  # too much = reactive is useless
 
-    detail_str = ", ".join(f"{h}v{l}={r:.0%}" for h, l, r in details)
+    detail_str = ", ".join(f"{h}v{lo}={r:.0%}" for h, lo, r in details)
     detail = f"T2_vs_T1={rate:.1%}, gap={gap:+.1%} [{detail_str}]"
     return _clamp(score), detail
 
@@ -198,7 +192,8 @@ def score_planning_gradient() -> Tuple[float, str]:
 # D2. REASONING GRADIENT — Does Tier 3 beat Tier 2?
 # ===================================================================
 
-def score_reasoning_gradient() -> Tuple[float, str]:
+
+def score_reasoning_gradient() -> tuple[float, str]:
     """
     If Bayesian reasoning beats pattern matching, hidden information
     creates genuine depth that rewards understanding uncertainty.
@@ -219,7 +214,7 @@ def score_reasoning_gradient() -> Tuple[float, str]:
     else:
         score = 10.0 - (gap - 0.25) / 0.15 * 2.0
 
-    detail_str = ", ".join(f"{h}v{l}={r:.0%}" for h, l, r in details)
+    detail_str = ", ".join(f"{h}v{lo}={r:.0%}" for h, lo, r in details)
     detail = f"T3_vs_T2={rate:.1%}, gap={gap:+.1%} [{detail_str}]"
     return _clamp(score), detail
 
@@ -228,7 +223,8 @@ def score_reasoning_gradient() -> Tuple[float, str]:
 # D3. COMPUTATION GRADIENT — Does Tier 4 beat Tier 3?
 # ===================================================================
 
-def score_computation_gradient() -> Tuple[float, str]:
+
+def score_computation_gradient() -> tuple[float, str]:
     """
     THE ANTI-CALCULABILITY TEST.
 
@@ -259,7 +255,7 @@ def score_computation_gradient() -> Tuple[float, str]:
     else:
         score = 9.0  # search actually hurts — also fine (overhead > benefit)
 
-    detail_str = ", ".join(f"{h}v{l}={r:.0%}" for h, l, r in details)
+    detail_str = ", ".join(f"{h}v{lo}={r:.0%}" for h, lo, r in details)
     detail = f"T4_vs_T3={rate:.1%}, gap={gap:+.1%} [{detail_str}]"
     return _clamp(score), detail
 
@@ -268,7 +264,8 @@ def score_computation_gradient() -> Tuple[float, str]:
 # D4. NARRATIVE FROM DEPTH — Do smarter players produce better games?
 # ===================================================================
 
-def score_narrative_from_depth() -> Tuple[float, str]:
+
+def score_narrative_from_depth() -> tuple[float, str]:
     """
     Chess between grandmasters produces more interesting games than
     chess between beginners. If our game has depth, smarter players
@@ -281,8 +278,7 @@ def score_narrative_from_depth() -> Tuple[float, str]:
     """
     # Collect games at different skill levels
     t1_games = _collect_games(TIER1_REPRESENTATIVES, TIER1_REPRESENTATIVES, n=20)
-    t3_games = _collect_games(TIER3_STRATEGIES + TIER2_STRATEGIES,
-                              TIER3_STRATEGIES + TIER2_STRATEGIES, n=20)
+    t3_games = _collect_games(TIER3_STRATEGIES + TIER2_STRATEGIES, TIER3_STRATEGIES + TIER2_STRATEGIES, n=20)
 
     def _avg_turns(games):
         return sum(r.turns for r in games) / max(len(games), 1)
@@ -296,9 +292,8 @@ def score_narrative_from_depth() -> Tuple[float, str]:
                 continue
             changes = 0
             for i in range(1, len(series)):
-                if series[i-1] != 0 and series[i] != 0:
-                    if (series[i-1] > 0) != (series[i] > 0):
-                        changes += 1
+                if series[i - 1] != 0 and series[i] != 0 and (series[i - 1] > 0) != (series[i] > 0):
+                    changes += 1
             total += changes
             count += 1
         return total / max(count, 1)
@@ -333,9 +328,11 @@ def score_narrative_from_depth() -> Tuple[float, str]:
 
     score = turn_score * 0.4 + lc_score * 0.3 + ent_score * 0.3
 
-    detail = (f"T1_turns={t1_turns:.1f} T3_turns={t3_turns:.1f} (+{turn_improvement:.1f}), "
-              f"T1_lc={t1_lc:.2f} T3_lc={t3_lc:.2f} (+{lc_improvement:.2f}), "
-              f"T1_entropy={t1_entropy:.2f} T3_entropy={t3_entropy:.2f} (+{entropy_improvement:.2f})")
+    detail = (
+        f"T1_turns={t1_turns:.1f} T3_turns={t3_turns:.1f} (+{turn_improvement:.1f}), "
+        f"T1_lc={t1_lc:.2f} T3_lc={t3_lc:.2f} (+{lc_improvement:.2f}), "
+        f"T1_entropy={t1_entropy:.2f} T3_entropy={t3_entropy:.2f} (+{entropy_improvement:.2f})"
+    )
     return _clamp(score), detail
 
 
@@ -343,7 +340,8 @@ def score_narrative_from_depth() -> Tuple[float, str]:
 # D5. DEPTH UNLOCKS MECHANICS — Do advanced strategies use more?
 # ===================================================================
 
-def score_depth_unlocks_mechanics() -> Tuple[float, str]:
+
+def score_depth_unlocks_mechanics() -> tuple[float, str]:
     """
     In chess, grandmasters use sacrifices, positional play, and endgame
     technique that beginners never touch. If our game has depth, advanced
@@ -353,20 +351,16 @@ def score_depth_unlocks_mechanics() -> Tuple[float, str]:
     than Tier 1? Do they use supply cutting, ambush, non-standard deployment?
     """
     t1_games = _collect_games(TIER1_REPRESENTATIVES, TIER1_REPRESENTATIVES, n=20)
-    adv_games = _collect_games(
-        TIER2_STRATEGIES + TIER3_STRATEGIES,
-        TIER2_STRATEGIES + TIER3_STRATEGIES,
-        n=20
-    )
+    adv_games = _collect_games(TIER2_STRATEGIES + TIER3_STRATEGIES, TIER2_STRATEGIES + TIER3_STRATEGIES, n=20)
 
     def _order_profile(games):
         totals = Counter()
         for r in games:
-            totals['scout'] += r.scouts_used
-            totals['fortify'] += r.fortifies_used
-            totals['ambush'] += r.ambushes_used
-            totals['charge'] += r.charges_used
-            totals['move'] += r.moves_used
+            totals["scout"] += r.scouts_used
+            totals["fortify"] += r.fortifies_used
+            totals["ambush"] += r.ambushes_used
+            totals["charge"] += r.charges_used
+            totals["move"] += r.moves_used
         return totals
 
     t1_profile = _order_profile(t1_games)
@@ -376,7 +370,7 @@ def score_depth_unlocks_mechanics() -> Tuple[float, str]:
     t1_total = sum(t1_profile.values()) or 1
     adv_total = sum(adv_profile.values()) or 1
 
-    order_types = ['scout', 'fortify', 'ambush', 'charge', 'move']
+    order_types = ["scout", "fortify", "ambush", "charge", "move"]
 
     # Measure divergence
     t1_dist = {ot: (t1_profile[ot] + 0.1) / (t1_total + 0.5) for ot in order_types}
@@ -400,9 +394,11 @@ def score_depth_unlocks_mechanics() -> Tuple[float, str]:
 
     t1_str = " ".join(f"{ot}={t1_profile[ot]}" for ot in order_types)
     adv_str = " ".join(f"{ot}={adv_profile[ot]}" for ot in order_types)
-    detail = (f"JS_div={js_div:.3f}, T1_supply_cut={t1_supply_cut:.1f}/game "
-              f"adv_supply_cut={adv_supply_cut:.1f}/game, "
-              f"T1=[{t1_str}], Adv=[{adv_str}]")
+    detail = (
+        f"JS_div={js_div:.3f}, T1_supply_cut={t1_supply_cut:.1f}/game "
+        f"adv_supply_cut={adv_supply_cut:.1f}/game, "
+        f"T1=[{t1_str}], Adv=[{adv_str}]"
+    )
     return _clamp(score), detail
 
 
@@ -410,7 +406,8 @@ def score_depth_unlocks_mechanics() -> Tuple[float, str]:
 # D6. GRADIENT SHAPE — Does the improvement flatten with sophistication?
 # ===================================================================
 
-def score_gradient_shape() -> Tuple[float, str]:
+
+def score_gradient_shape() -> tuple[float, str]:
     """
     The ideal depth gradient flattens: each tier helps, but by less.
 
@@ -457,16 +454,19 @@ def score_gradient_shape() -> Tuple[float, str]:
     if gap3 > 0.15:
         score -= 3.0  # very calculable
 
-    detail = (f"T2vT1={t2_vs_t1:.1%} (gap={gap1:+.1%}), "
-              f"T3vT2={t3_vs_t2:.1%} (gap={gap2:+.1%}), "
-              f"T4vT3={t4_vs_t3:.1%} (gap={gap3:+.1%}), "
-              f"shape={'diminishing' if gap1 > gap2 > gap3 else 'NOT diminishing'}")
+    detail = (
+        f"T2vT1={t2_vs_t1:.1%} (gap={gap1:+.1%}), "
+        f"T3vT2={t3_vs_t2:.1%} (gap={gap2:+.1%}), "
+        f"T4vT3={t4_vs_t3:.1%} (gap={gap3:+.1%}), "
+        f"shape={'diminishing' if gap1 > gap2 > gap3 else 'NOT diminishing'}"
+    )
     return _clamp(score), detail
 
 
 # ===================================================================
 # COMBINED SCORING
 # ===================================================================
+
 
 def compute_depth_scores(verbose=True):
     """Run all depth measurements and compute the Game Depth Score."""
@@ -506,8 +506,8 @@ def compute_depth_scores(verbose=True):
 
         # The combined picture
         print("\n  THE THREE SCORES TOGETHER:")
-        print(f"    Fun Score:       (run test_fun_score.py for current)")
-        print(f"    Narrative Score: (run test_narrative_score.py for current)")
+        print("    Fun Score:       (run test_fun_score.py for current)")
+        print("    Narrative Score: (run test_narrative_score.py for current)")
         print(f"    Depth Score:     {overall:.1f}/10")
         print()
         print("  For 'Chess for the AI Age' all three must be 7.5+:")
@@ -522,25 +522,24 @@ def compute_depth_scores(verbose=True):
 # PYTEST ENTRY POINTS
 # ===================================================================
 
+
 def test_depth_score():
     """Compute and display the depth score. Informational."""
-    scores, overall = compute_depth_scores(verbose=True)
+    _scores, overall = compute_depth_scores(verbose=True)
     assert overall >= 0, "Depth score computation failed"
 
 
 def test_each_tier_can_win():
     """Every tier must be able to win games. Basic sanity."""
-    for tier_name, strats in [("Tier2", TIER2_STRATEGIES),
-                               ("Tier3", TIER3_STRATEGIES),
-                               ("Tier4", TIER4_STRATEGIES)]:
+    for tier_name, strats in [("Tier2", TIER2_STRATEGIES), ("Tier3", TIER3_STRATEGIES), ("Tier4", TIER4_STRATEGIES)]:
         for s in strats:
             wins = 0
             for i in range(10):
                 r = run_game(s, AggressiveStrategy(), seed=i, rng_seed=i)
-                if r.winner == 'p1':
+                if r.winner == "p1":
                     wins += 1
                 r = run_game(AggressiveStrategy(), s, seed=i, rng_seed=i + 100)
-                if r.winner == 'p2':
+                if r.winner == "p2":
                     wins += 1
             assert wins > 0, f"{tier_name}/{s.name} never won in 20 games"
 

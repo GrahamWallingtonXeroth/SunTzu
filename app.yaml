@@ -1,46 +1,13 @@
-# Google Cloud Platform App Engine Configuration
-# This file configures deployment settings for the SunTzu Flask application
-
-# Runtime configuration - specifies Python 3.12 for the App Engine standard environment
 runtime: python312
-
-# Instance class configuration
-# F1 is the smallest instance class, suitable for free tier and cost optimization
 instance_class: F1
-
-# Entry point - the command to start your Flask application
-# Using gunicorn for production deployment
 entrypoint: gunicorn -b :$PORT app:app
 
-# Environment variables
-env_variables:
-  PROJECT_ID: "halogen-valve-465821-v7"
-
-# Automatic scaling configuration
-# This allows App Engine to automatically scale instances based on traffic
 automatic_scaling:
-  # Maximum number of instances to run (keeps costs low for free tier)
   max_instances: 2
-  
-  # Target CPU utilization percentage
-  # App Engine will scale up when CPU usage exceeds 65%
   target_cpu_utilization: 0.65
-  
-  # Minimum number of instances to keep running
-  # Set to 0 to allow scaling down to zero when no traffic (cost optimization)
   min_instances: 0
 
-# URL handlers configuration
-# This section defines how requests are routed to your application
 handlers:
-  # Catch-all handler for all routes - routes all requests to the Flask app
   - url: /.*
     script: auto
-    # Enable HTTPS by default for security - redirects HTTP to HTTPS
     secure: always
-
-# Notes for deployment:
-# 1. Using gunicorn for production-grade WSGI server
-# 2. Ensure all dependencies are listed in requirements.txt
-# 3. The free tier includes 28 instance hours per day
-# 4. This configuration is optimized for cost efficiency while maintaining performance

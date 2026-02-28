@@ -24,10 +24,11 @@ import json
 import os
 import random as _random_module
 from enum import Enum
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Any
+
+from map_gen import get_hex_neighbors, hex_distance
 from models import Force
 from state import GameState
-from map_gen import hex_distance, get_hex_neighbors
 
 
 class OrderType(Enum):
@@ -38,20 +39,20 @@ class OrderType(Enum):
     CHARGE = "Charge"
 
 
-def _load_order_config() -> Dict:
+def _load_order_config() -> dict:
     """Load order-related config."""
     defaults = {
-        'scout_cost': 2,
-        'fortify_cost': 2,
-        'ambush_cost': 3,
-        'charge_cost': 2,
-        'supply_range': 2,
-        'max_supply_hops': 2,
-        'scout_accuracy': 0.7,
+        "scout_cost": 2,
+        "fortify_cost": 2,
+        "ambush_cost": 3,
+        "charge_cost": 2,
+        "supply_range": 2,
+        "max_supply_hops": 2,
+        "scout_accuracy": 0.7,
     }
-    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path) as f:
             config = json.load(f)
             for k in defaults:
                 if k in config:
@@ -61,15 +62,15 @@ def _load_order_config() -> Dict:
     return defaults
 
 
-def _build_order_costs() -> Dict['OrderType', int]:
+def _build_order_costs() -> dict["OrderType", int]:
     """Build ORDER_COSTS from config."""
     cfg = _load_order_config()
     return {
         OrderType.MOVE: 0,
-        OrderType.SCOUT: cfg['scout_cost'],
-        OrderType.FORTIFY: cfg['fortify_cost'],
-        OrderType.AMBUSH: cfg['ambush_cost'],
-        OrderType.CHARGE: cfg['charge_cost'],
+        OrderType.SCOUT: cfg["scout_cost"],
+        OrderType.FORTIFY: cfg["fortify_cost"],
+        OrderType.AMBUSH: cfg["ambush_cost"],
+        OrderType.CHARGE: cfg["charge_cost"],
     }
 
 
@@ -77,12 +78,16 @@ ORDER_COSTS = _build_order_costs()
 
 
 class Order:
-    def __init__(self, order_type: OrderType, force: Force,
-                 target_hex: Optional[Tuple[int, int]] = None,
-                 scout_target_id: Optional[str] = None):
+    def __init__(
+        self,
+        order_type: OrderType,
+        force: Force,
+        target_hex: tuple[int, int] | None = None,
+        scout_target_id: str | None = None,
+    ):
         self.order_type = order_type
         self.force = force
-        self.target_hex = target_hex          # For Move and Charge
+        self.target_hex = target_hex  # For Move and Charge
         self.scout_target_id = scout_target_id  # For Scout: which enemy force to reveal
 
 
@@ -90,18 +95,22 @@ class OrderValidationError(Exception):
     pass
 
 
-def is_adjacent(current: Tuple[int, int], target: Tuple[int, int]) -> bool:
+def is_adjacent(current: tuple[int, int], target: tuple[int, int]) -> bool:
     """Check if target hex is adjacent to current hex in axial coordinates."""
     q1, r1 = current
     q2, r2 = target
     diffs = (q2 - q1, r2 - r1, (q1 + r1) - (q2 + r2))
     return diffs in [
-        (1, 0, -1), (1, -1, 0), (0, -1, 1),
-        (-1, 0, 1), (-1, 1, 0), (0, 1, -1),
+        (1, 0, -1),
+        (1, -1, 0),
+        (0, -1, 1),
+        (-1, 0, 1),
+        (-1, 1, 0),
+        (0, 1, -1),
     ]
 
 
-def within_range(pos1: Tuple[int, int], pos2: Tuple[int, int], max_range: int) -> bool:
+def within_range(pos1: tuple[int, int], pos2: tuple[int, int], max_range: int) -> bool:
     """Check if two positions are within a given range."""
     return hex_distance(pos1[0], pos1[1], pos2[0], pos2[1]) <= max_range
 
@@ -109,18 +118,18 @@ def within_range(pos1: Tuple[int, int], pos2: Tuple[int, int], max_range: int) -
 def _power_band(power: int) -> str:
     """Return the noisy band for a power value: low (1-2), mid (3), high (4-5)."""
     if power <= 2:
-        return 'band_low'
+        return "band_low"
     elif power == 3:
-        return 'band_mid'
+        return "band_mid"
     else:
-        return 'band_high'
+        return "band_high"
 
 
 def resolve_scout(
     actual_power: int,
     scout_accuracy: float = 0.7,
     rng=None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Resolve a noisy scout.
 
@@ -134,19 +143,18 @@ def resolve_scout(
     """
     r = rng if rng else _random_module
     if r.random() < scout_accuracy:
-        return {'type': 'exact', 'power': actual_power}
+        return {"type": "exact", "power": actual_power}
     else:
         band = _power_band(actual_power)
-        if band == 'band_low':
-            return {'type': 'band', 'band': band, 'power_range': [1, 2]}
-        elif band == 'band_mid':
-            return {'type': 'band', 'band': band, 'power_range': [3]}
+        if band == "band_low":
+            return {"type": "band", "band": band, "power_range": [1, 2]}
+        elif band == "band_mid":
+            return {"type": "band", "band": band, "power_range": [3]}
         else:
-            return {'type': 'band', 'band': band, 'power_range': [4, 5]}
+            return {"type": "band", "band": band, "power_range": [4, 5]}
 
 
-def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3,
-               max_hops: int = 0) -> bool:
+def has_supply(force: Force, player_forces: list[Force], supply_range: int = 3, max_hops: int = 0) -> bool:
     """
     Check if a force has supply.
 
@@ -184,10 +192,7 @@ def has_supply(force: Force, player_forces: List[Force], supply_range: int = 3,
         current, hops = queue.pop(0)
         for f in alive_forces:
             if f.id not in supplied:
-                dist = hex_distance(
-                    current.position[0], current.position[1],
-                    f.position[0], f.position[1]
-                )
+                dist = hex_distance(current.position[0], current.position[1], f.position[0], f.position[1])
                 if dist <= supply_range:
                     new_hops = hops + 1
                     # If max_hops is set, don't chain beyond that depth
@@ -213,19 +218,15 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
 
     cost = ORDER_COSTS[order.order_type]
     if player.shih < cost:
-        raise OrderValidationError(
-            f"Insufficient Shih: have {player.shih}, need {cost} for {order.order_type.value}"
-        )
+        raise OrderValidationError(f"Insufficient Shih: have {player.shih}, need {cost} for {order.order_type.value}")
 
     # Supply check: special orders require supply line to Sovereign
     if order.order_type in (OrderType.SCOUT, OrderType.FORTIFY, OrderType.AMBUSH, OrderType.CHARGE):
         cfg = _load_order_config()
-        supply_range = cfg['supply_range']
-        max_hops = cfg['max_supply_hops']
+        supply_range = cfg["supply_range"]
+        max_hops = cfg["max_supply_hops"]
         if not has_supply(force, player.forces, supply_range, max_hops=max_hops):
-            raise OrderValidationError(
-                f"Force {force.id} has no supply line to Sovereign — can only Move"
-            )
+            raise OrderValidationError(f"Force {force.id} has no supply line to Sovereign — can only Move")
 
     if order.order_type == OrderType.MOVE:
         if not order.target_hex:
@@ -240,8 +241,7 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
             raise OrderValidationError("Charge requires a target hex")
         if not game_state.is_valid_position(order.target_hex):
             raise OrderValidationError(f"Target {order.target_hex} is off the board or Scorched")
-        dist = hex_distance(force.position[0], force.position[1],
-                           order.target_hex[0], order.target_hex[1])
+        dist = hex_distance(force.position[0], force.position[1], order.target_hex[0], order.target_hex[1])
         if dist < 1 or dist > 2:
             raise OrderValidationError(f"Charge target must be 1-2 hexes away, got {dist}")
         if dist == 2:
@@ -249,9 +249,7 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
             intermediates = set(get_hex_neighbors(force.position[0], force.position[1]))
             target_neighbors = set(get_hex_neighbors(order.target_hex[0], order.target_hex[1]))
             shared = intermediates & target_neighbors
-            valid_path = any(
-                game_state.is_valid_position(h) for h in shared
-            )
+            valid_path = any(game_state.is_valid_position(h) for h in shared)
             if not valid_path:
                 raise OrderValidationError("No valid path for 2-hex charge")
 
@@ -281,10 +279,10 @@ def validate_order(order: Order, game_state: GameState, player_id: str) -> None:
 
 
 def resolve_orders(
-    p1_orders: List[Order],
-    p2_orders: List[Order],
+    p1_orders: list[Order],
+    p2_orders: list[Order],
     game_state: GameState,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Resolve both players' orders simultaneously.
 
@@ -299,15 +297,15 @@ def resolve_orders(
 
     Returns a results dict with combats, scout results, and errors.
     """
-    results: Dict[str, Any] = {
-        'combats': [],
-        'scouts': [],
-        'movements': [],
-        'errors': [],
-        'sovereign_captured': None,
+    results: dict[str, Any] = {
+        "combats": [],
+        "scouts": [],
+        "movements": [],
+        "errors": [],
+        "sovereign_captured": None,
     }
 
-    all_orders = [(o, 'p1') for o in p1_orders] + [(o, 'p2') for o in p2_orders]
+    all_orders = [(o, "p1") for o in p1_orders] + [(o, "p2") for o in p2_orders]
 
     # Reset fortified/ambushing/charging status from last turn
     for player in game_state.players:
@@ -317,7 +315,7 @@ def resolve_orders(
             force.charging = False
 
     # Phase 1: Deduct Shih and validate
-    valid_orders: List[tuple] = []
+    valid_orders: list[tuple] = []
     for order, pid in all_orders:
         try:
             validate_order(order, game_state, pid)
@@ -326,38 +324,43 @@ def resolve_orders(
             player.update_shih(-cost)
             valid_orders.append((order, pid))
         except OrderValidationError as e:
-            results['errors'].append({'player': pid, 'force': order.force.id, 'error': str(e)})
+            results["errors"].append({"player": pid, "force": order.force.id, "error": str(e)})
 
     # Track executed order counts (after validation and shih deduction)
-    order_counts: Dict[str, int] = {}
-    for order, pid in valid_orders:
+    order_counts: dict[str, int] = {}
+    for order, _pid in valid_orders:
         key = order.order_type.value.lower()
         order_counts[key] = order_counts.get(key, 0) + 1
-    results['order_counts'] = order_counts
+    results["order_counts"] = order_counts
 
     # Phase 2: Apply Fortify
-    for order, pid in valid_orders:
+    for order, _pid in valid_orders:
         if order.order_type == OrderType.FORTIFY:
             order.force.fortified = True
-            game_state.log.append({
-                'turn': game_state.turn, 'phase': 'resolve',
-                'event': f'{order.force.id} fortifies at {order.force.position}',
-            })
+            game_state.log.append(
+                {
+                    "turn": game_state.turn,
+                    "phase": "resolve",
+                    "event": f"{order.force.id} fortifies at {order.force.position}",
+                }
+            )
 
     # Phase 3: Apply Ambush
-    for order, pid in valid_orders:
+    for order, _pid in valid_orders:
         if order.order_type == OrderType.AMBUSH:
             order.force.ambushing = True
-            game_state.log.append({
-                'turn': game_state.turn, 'phase': 'resolve',
-                'event': f'{order.force.id} sets ambush at {order.force.position} (hidden)',
-            })
+            game_state.log.append(
+                {
+                    "turn": game_state.turn,
+                    "phase": "resolve",
+                    "event": f"{order.force.id} sets ambush at {order.force.position} (hidden)",
+                }
+            )
 
     # Phase 4: Process Moves and Charges
     # Both are treated as movement orders with a target hex
-    move_orders = [(o, pid) for o, pid in valid_orders
-                   if o.order_type in (OrderType.MOVE, OrderType.CHARGE)]
-    move_targets: Dict[Tuple[int, int], List[tuple]] = {}
+    move_orders = [(o, pid) for o, pid in valid_orders if o.order_type in (OrderType.MOVE, OrderType.CHARGE)]
+    move_targets: dict[tuple[int, int], list[tuple]] = {}
     for order, pid in move_orders:
         target = order.target_hex
         if target not in move_targets:
@@ -365,7 +368,7 @@ def resolve_orders(
         move_targets[target].append((order, pid))
 
     # Also check for forces already occupying target hexes
-    combats: List[Dict[str, Any]] = []
+    combats: list[dict[str, Any]] = []
     moved_force_ids: set = set()
 
     for target, movers in move_targets.items():
@@ -374,18 +377,20 @@ def resolve_orders(
 
         if len(mover_players) > 1:
             # Head-on collision: forces from both players moving to same hex
-            p1_mover = next((o, pid) for o, pid in movers if pid == 'p1')
-            p2_mover = next((o, pid) for o, pid in movers if pid == 'p2')
-            combats.append({
-                'attacker': p1_mover[0].force,
-                'attacker_player': 'p1',
-                'defender': p2_mover[0].force,
-                'defender_player': 'p2',
-                'hex': target,
-                'type': 'collision',
-                'attacker_charging': p1_mover[0].order_type == OrderType.CHARGE,
-                'defender_charging': p2_mover[0].order_type == OrderType.CHARGE,
-            })
+            p1_mover = next((o, pid) for o, pid in movers if pid == "p1")
+            p2_mover = next((o, pid) for o, pid in movers if pid == "p2")
+            combats.append(
+                {
+                    "attacker": p1_mover[0].force,
+                    "attacker_player": "p1",
+                    "defender": p2_mover[0].force,
+                    "defender_player": "p2",
+                    "hex": target,
+                    "type": "collision",
+                    "attacker_charging": p1_mover[0].order_type == OrderType.CHARGE,
+                    "defender_charging": p2_mover[0].order_type == OrderType.CHARGE,
+                }
+            )
             moved_force_ids.add(p1_mover[0].force.id)
             moved_force_ids.add(p2_mover[0].force.id)
         else:
@@ -396,59 +401,72 @@ def resolve_orders(
                     occ_owner = game_state.get_force_owner(occupant.id)
                     if occ_owner and occ_owner.id != pid:
                         # Moving into enemy-occupied hex
-                        combats.append({
-                            'attacker': order.force,
-                            'attacker_player': pid,
-                            'defender': occupant,
-                            'defender_player': occ_owner.id,
-                            'hex': target,
-                            'type': 'assault',
-                            'attacker_charging': order.order_type == OrderType.CHARGE,
-                        })
+                        combats.append(
+                            {
+                                "attacker": order.force,
+                                "attacker_player": pid,
+                                "defender": occupant,
+                                "defender_player": occ_owner.id,
+                                "hex": target,
+                                "type": "assault",
+                                "attacker_charging": order.order_type == OrderType.CHARGE,
+                            }
+                        )
                         moved_force_ids.add(order.force.id)
                     else:
                         # Moving into friendly-occupied hex — invalid, skip
-                        results['errors'].append({
-                            'player': pid,
-                            'force': order.force.id,
-                            'error': f'Cannot move to {target}: occupied by friendly force',
-                        })
+                        results["errors"].append(
+                            {
+                                "player": pid,
+                                "force": order.force.id,
+                                "error": f"Cannot move to {target}: occupied by friendly force",
+                            }
+                        )
                 else:
                     # Empty hex — move succeeds
                     old_pos = order.force.position
                     order.force.position = target
                     moved_force_ids.add(order.force.id)
-                    results['movements'].append({
-                        'force_id': order.force.id,
-                        'from': old_pos,
-                        'to': target,
-                    })
-                    game_state.log.append({
-                        'turn': game_state.turn, 'phase': 'resolve',
-                        'event': f'{order.force.id} moves from {old_pos} to {target}',
-                    })
+                    results["movements"].append(
+                        {
+                            "force_id": order.force.id,
+                            "from": old_pos,
+                            "to": target,
+                        }
+                    )
+                    game_state.log.append(
+                        {
+                            "turn": game_state.turn,
+                            "phase": "resolve",
+                            "event": f"{order.force.id} moves from {old_pos} to {target}",
+                        }
+                    )
 
     # Phase 5: Resolve Combats
     from resolution import resolve_combat
+
     for combat in combats:
         # Set charging flags before combat resolution
-        if combat.get('attacker_charging'):
-            combat['attacker'].charging = True
-        if combat.get('defender_charging'):
-            combat['defender'].charging = True
+        if combat.get("attacker_charging"):
+            combat["attacker"].charging = True
+        if combat.get("defender_charging"):
+            combat["defender"].charging = True
 
         combat_result = resolve_combat(
-            combat['attacker'], combat['attacker_player'],
-            combat['defender'], combat['defender_player'],
-            combat['hex'], game_state,
+            combat["attacker"],
+            combat["attacker_player"],
+            combat["defender"],
+            combat["defender_player"],
+            combat["hex"],
+            game_state,
         )
-        results['combats'].append(combat_result)
-        if combat_result.get('sovereign_captured'):
-            results['sovereign_captured'] = combat_result['sovereign_captured']
+        results["combats"].append(combat_result)
+        if combat_result.get("sovereign_captured"):
+            results["sovereign_captured"] = combat_result["sovereign_captured"]
 
     # Phase 6: Apply Scouts (noisy scouting — v10)
     cfg = _load_order_config()
-    scout_accuracy = cfg.get('scout_accuracy', 0.7)
+    scout_accuracy = cfg.get("scout_accuracy", 0.7)
 
     for order, pid in valid_orders:
         if order.order_type == OrderType.SCOUT:
@@ -461,41 +479,47 @@ def resolve_orders(
                     scout_result = resolve_scout(actual_power, scout_accuracy)
 
                     scout_entry = {
-                        'scouting_force': order.force.id,
-                        'scouted_force': target_force.id,
-                        'actual_power': actual_power,
-                        'player': pid,
+                        "scouting_force": order.force.id,
+                        "scouted_force": target_force.id,
+                        "actual_power": actual_power,
+                        "player": pid,
                     }
 
-                    if scout_result['type'] == 'exact':
+                    if scout_result["type"] == "exact":
                         # Perfect intel — store exact power
                         player.known_enemy_powers[target_force.id] = actual_power
-                        scout_entry['revealed_power'] = actual_power
-                        scout_entry['scout_type'] = 'exact'
-                        game_state.log.append({
-                            'turn': game_state.turn, 'phase': 'resolve',
-                            'event': f'{order.force.id} scouted {target_force.id}: power {actual_power} (private to {pid})',
-                        })
+                        scout_entry["revealed_power"] = actual_power
+                        scout_entry["scout_type"] = "exact"
+                        game_state.log.append(
+                            {
+                                "turn": game_state.turn,
+                                "phase": "resolve",
+                                "event": f"{order.force.id} scouted {target_force.id}: power {actual_power} (private to {pid})",
+                            }
+                        )
                     else:
                         # Noisy intel — store band as negative sentinel
                         # Convention: known_enemy_powers stores exact int for exact,
                         # or we store band info separately.
                         # For backward compat, store the band as a negative:
                         # -1 = band_low (1-2), -3 = band_mid (3), -4 = band_high (4-5)
-                        band = scout_result['band']
-                        band_sentinel = {'band_low': -1, 'band_mid': -3, 'band_high': -4}[band]
+                        band = scout_result["band"]
+                        band_sentinel = {"band_low": -1, "band_mid": -3, "band_high": -4}[band]
                         player.known_enemy_powers[target_force.id] = band_sentinel
-                        scout_entry['revealed_band'] = band
-                        scout_entry['power_range'] = scout_result['power_range']
-                        scout_entry['scout_type'] = 'band'
-                        game_state.log.append({
-                            'turn': game_state.turn, 'phase': 'resolve',
-                            'event': (
-                                f'{order.force.id} scouted {target_force.id}: '
-                                f'{band} {scout_result["power_range"]} (private to {pid})'
-                            ),
-                        })
+                        scout_entry["revealed_band"] = band
+                        scout_entry["power_range"] = scout_result["power_range"]
+                        scout_entry["scout_type"] = "band"
+                        game_state.log.append(
+                            {
+                                "turn": game_state.turn,
+                                "phase": "resolve",
+                                "event": (
+                                    f"{order.force.id} scouted {target_force.id}: "
+                                    f"{band} {scout_result['power_range']} (private to {pid})"
+                                ),
+                            }
+                        )
 
-                    results['scouts'].append(scout_entry)
+                    results["scouts"].append(scout_entry)
 
     return results

@@ -18,12 +18,11 @@ To implement a real LLM agent:
 
 import random
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Any, Tuple
 
-from models import Force, Player
-from state import GameState
-from orders import Order, OrderType
 from benchmark.telemetry import AgentReport, BeliefState
+from models import Player
+from orders import Order, OrderType
+from state import GameState
 
 
 class LLMAgent(ABC):
@@ -43,7 +42,7 @@ class LLMAgent(ABC):
         player_id: str,
         game_state: GameState,
         rng: random.Random,
-    ) -> Tuple[List[Order], AgentReport]:
+    ) -> tuple[list[Order], AgentReport]:
         """
         Observe the game state and generate orders + telemetry.
 
@@ -62,7 +61,7 @@ class LLMAgent(ABC):
         self,
         player: Player,
         rng: random.Random,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """
         Assign power values (1-5) to forces during deployment.
 
@@ -90,26 +89,28 @@ class MockLLMAgent(LLMAgent):
     Used to validate the benchmark harness without API calls.
     """
 
-    def __init__(self, strategy_name: str = 'cautious'):
+    def __init__(self, strategy_name: str = "cautious"):
         self._strategy_name = strategy_name
         self._strategy = None
-        self._beliefs: Dict[str, BeliefState] = {}
+        self._beliefs: dict[str, BeliefState] = {}
 
     @property
     def name(self) -> str:
-        return f'mock_llm_{self._strategy_name}'
+        return f"mock_llm_{self._strategy_name}"
 
     def _get_strategy(self):
         """Lazy-load strategy to avoid circular imports."""
         if self._strategy is None:
             from tests.simulate import STRATEGY_MAP
+
             self._strategy = STRATEGY_MAP.get(self._strategy_name)
             if self._strategy is None:
                 from tests.simulate import CautiousStrategy
+
                 self._strategy = CautiousStrategy()
         return self._strategy
 
-    def deploy(self, player: Player, rng: random.Random) -> Dict[str, int]:
+    def deploy(self, player: Player, rng: random.Random) -> dict[str, int]:
         return self._get_strategy().deploy(player, rng)
 
     def observe_and_plan(
@@ -117,7 +118,7 @@ class MockLLMAgent(LLMAgent):
         player_id: str,
         game_state: GameState,
         rng: random.Random,
-    ) -> Tuple[List[Order], AgentReport]:
+    ) -> tuple[list[Order], AgentReport]:
         strategy = self._get_strategy()
         player = game_state.get_player_by_id(player_id)
         opponent = game_state.get_opponent(player_id)
@@ -156,19 +157,22 @@ class MockLLMAgent(LLMAgent):
         if opponent:
             for force in opponent.get_alive_forces():
                 action_predictions[force.id] = {
-                    'Move': 0.3, 'Charge': 0.2, 'Scout': 0.2,
-                    'Fortify': 0.15, 'Ambush': 0.15,
+                    "Move": 0.3,
+                    "Charge": 0.2,
+                    "Scout": 0.2,
+                    "Fortify": 0.15,
+                    "Ambush": 0.15,
                 }
 
         # Format chosen orders as strings
         order_strs = []
         for o in orders:
             if o.order_type == OrderType.SCOUT:
-                order_strs.append(f'Scout {o.force.id} -> {o.scout_target_id}')
+                order_strs.append(f"Scout {o.force.id} -> {o.scout_target_id}")
             elif o.target_hex:
-                order_strs.append(f'{o.order_type.value} {o.force.id} {o.target_hex}')
+                order_strs.append(f"{o.order_type.value} {o.force.id} {o.target_hex}")
             else:
-                order_strs.append(f'{o.order_type.value} {o.force.id}')
+                order_strs.append(f"{o.order_type.value} {o.force.id}")
 
         report = AgentReport(
             turn=game_state.turn,
